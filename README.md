@@ -175,8 +175,10 @@ curl http://localhost:8000/api/v1/environments/ | jq .
 - [x] GitHub webhook integration
 - [x] Database models and persistence
 - [x] REST API for environment management
-- [ ] Kubernetes provisioning service
+- [x] Kubernetes provisioning service
+- [x] Webhook-K8s integration (namespace lifecycle)
 - [ ] Celery workers for async tasks
+- [ ] Application deployment to namespaces
 - [ ] DNS and ingress automation
 - [ ] Production deployment (AWS EKS)
 - [ ] Multi-cloud support
@@ -188,6 +190,7 @@ See [TODO.md](TODO.md) for detailed development tasks (local file, not tracked i
 - [GitHub App Setup](docs/github-app-setup.md)
 - [GitHub Integration Summary](docs/github-integration-summary.md)
 - [Database Integration](docs/database-integration-summary.md)
+- [Webhook-K8s Integration](docs/webhook-k8s-integration.md)
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Current State](docs/current-state.md)
 

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.security import verify_github_webhook, verify_github_delivery
 from app.schemas.github import PullRequestWebhook
 from app.services.github import github_service
+from app.services.kubernetes import kubernetes_service
 from app.database import get_db
 from app.crud import user as user_crud
 from app.crud import environment as environment_crud
@@ -68,42 +69,106 @@ async def handle_pull_request_opened(payload: PullRequestWebhook, db: Session):
 
     logger.info(f"Created deployment {deployment.id} for environment {environment.id}")
 
-    # Post initial comment to PR
-    if installation_id:
-        comment = f"""## Ephemera Environment
+    # Create Kubernetes namespace
+    k8s_labels = {
+        "app": "ephemera",
+        "pr-number": str(pr.number),
+        "repository": repo.name,
+        "environment-id": str(environment.id)
+    }
 
-Your preview environment is being created...
+    k8s_success = kubernetes_service.create_namespace(
+        namespace=environment.namespace,
+        labels=k8s_labels
+    )
+
+    if k8s_success:
+        # Create resource quota
+        kubernetes_service.create_resource_quota(
+            namespace=environment.namespace,
+            cpu_limit="1",
+            memory_limit="2Gi",
+            pod_limit="10"
+        )
+
+        # Update environment status
+        environment_crud.update_environment_status(
+            db=db,
+            environment=environment,
+            status=EnvironmentStatus.READY
+        )
+        logger.info(f"Kubernetes namespace {environment.namespace} created successfully")
+
+        # Post success comment to PR
+        if installation_id:
+            comment = f"""## Ephemera Environment Ready
+
+Your preview environment has been created!
 
 **Environment URL**: {env_url}
 **Namespace**: `{environment.namespace}`
-**Status**: Provisioning
-
-This usually takes 1-2 minutes. You'll receive another comment when it's ready!
+**Status**: Ready
 
 ---
 *Powered by Ephemera*
 """
-        github_service.post_comment_to_pr(
-            installation_id=installation_id,
-            repo_full_name=repo.full_name,
-            pr_number=pr.number,
-            comment=comment
-        )
+            github_service.post_comment_to_pr(
+                installation_id=installation_id,
+                repo_full_name=repo.full_name,
+                pr_number=pr.number,
+                comment=comment
+            )
 
-        # Update commit status
-        github_service.update_pr_status(
-            installation_id=installation_id,
-            repo_full_name=repo.full_name,
-            commit_sha=pr.head["sha"],
-            state="pending",
-            description="Creating preview environment...",
-            context="ephemera/environment",
-            target_url=env_url
+            # Update commit status to success
+            github_service.update_pr_status(
+                installation_id=installation_id,
+                repo_full_name=repo.full_name,
+                commit_sha=pr.head["sha"],
+                state="success",
+                description="Preview environment ready",
+                context="ephemera/environment",
+                target_url=env_url
+            )
+    else:
+        # Update environment status to failed
+        environment_crud.update_environment_status(
+            db=db,
+            environment=environment,
+            status=EnvironmentStatus.FAILED,
+            error_message="Failed to create Kubernetes namespace"
         )
+        logger.error(f"Failed to create Kubernetes namespace {environment.namespace}")
 
-    # Note: Background task provisioning will be implemented in future release
-    # See: https://github.com/sabiut/ephemera/issues (Celery worker implementation)
-    logger.info(f"Environment {environment.namespace} ready for provisioning")
+        # Post failure comment to PR
+        if installation_id:
+            comment = f"""## Ephemera Environment Failed
+
+Failed to create preview environment.
+
+**Namespace**: `{environment.namespace}`
+**Status**: Failed
+
+Please check logs or contact support.
+
+---
+*Powered by Ephemera*
+"""
+            github_service.post_comment_to_pr(
+                installation_id=installation_id,
+                repo_full_name=repo.full_name,
+                pr_number=pr.number,
+                comment=comment
+            )
+
+            # Update commit status to failure
+            github_service.update_pr_status(
+                installation_id=installation_id,
+                repo_full_name=repo.full_name,
+                commit_sha=pr.head["sha"],
+                state="failure",
+                description="Failed to create environment",
+                context="ephemera/environment"
+            )
 
 
 async def handle_pull_request_closed(payload: PullRequestWebhook, db: Session):
@@ -129,31 +194,49 @@ async def handle_pull_request_closed(payload: PullRequestWebhook, db: Session):
 
     logger.info(f"Marked environment {environment.namespace} for destruction")
 
-    # Post cleanup comment
-    if installation_id:
-        action = "merged" if pr.merged else "closed"
+    # Delete Kubernetes namespace
+    k8s_success = kubernetes_service.delete_namespace(environment.namespace)
 
-        comment = f"""## Environment Cleanup
+    if k8s_success:
+        # Update environment status to destroyed
+        environment_crud.update_environment_status(
+            db=db,
+            environment=environment,
+            status=EnvironmentStatus.DESTROYED
+        )
+        logger.info(f"Kubernetes namespace {environment.namespace} deleted successfully")
 
-PR was {action}. Preview environment is being destroyed.
+        # Post cleanup success comment
+        if installation_id:
+            action = "merged" if pr.merged else "closed"
+
+            comment = f"""## Environment Cleanup Complete
+
+PR was {action}. Preview environment has been destroyed.
 
 **Namespace**: `{environment.namespace}`
-**Status**: Destroying
+**Status**: Destroyed
 
-All resources will be cleaned up within 1-2 minutes.
+All resources have been cleaned up.
 
 ---
 *Powered by Ephemera*
 """
-        github_service.post_comment_to_pr(
-            installation_id=installation_id,
-            repo_full_name=repo.full_name,
-            pr_number=pr.number,
-            comment=comment
+            github_service.post_comment_to_pr(
+                installation_id=installation_id,
+                repo_full_name=repo.full_name,
+                pr_number=pr.number,
+                comment=comment
+            )
+    else:
+        # Update environment status to failed
+        environment_crud.update_environment_status(
+            db=db,
+            environment=environment,
+            status=EnvironmentStatus.FAILED,
+            error_message="Failed to delete Kubernetes namespace"
         )
-
-    # Note: Background task for cleanup will be implemented in future release
-    logger.info(f"Environment {environment.namespace} marked for cleanup")
+        logger.error(f"Failed to delete Kubernetes namespace {environment.namespace}")
 
 
 async def handle_pull_request_synchronize(payload: PullRequestWebhook, db: Session):
@@ -182,21 +265,51 @@ async def handle_pull_request_synchronize(payload: PullRequestWebhook, db: Sessi
 
     logger.info(f"Created deployment {deployment.id} for updated PR #{pr.number}")
 
-    # Update commit status
-    if installation_id:
-        env_url = github_service.build_environment_url(pr.number, repo.name)
-        github_service.update_pr_status(
-            installation_id=installation_id,
-            repo_full_name=repo.full_name,
-            commit_sha=pr.head["sha"],
-            state="pending",
-            description="Updating preview environment...",
-            context="ephemera/environment",
-            target_url=env_url
+    # Verify namespace still exists
+    namespace_exists = kubernetes_service.namespace_exists(environment.namespace)
+
+    if namespace_exists:
+        # Update environment status back to ready
+        environment_crud.update_environment_status(
+            db=db,
+            environment=environment,
+            status=EnvironmentStatus.READY
         )
 
-    # Note: Background task for updates will be implemented in future release
-    logger.info(f"Environment {environment.namespace} ready for update")
+        # Update commit status to success
+        if installation_id:
+            env_url = github_service.build_environment_url(pr.number, repo.name)
+            github_service.update_pr_status(
+                installation_id=installation_id,
+                repo_full_name=repo.full_name,
+                commit_sha=pr.head["sha"],
+                state="success",
+                description="Environment ready for new commits",
+                context="ephemera/environment",
+                target_url=env_url
+            )
+
+        logger.info(f"Environment {environment.namespace} ready for new deployment")
+    else:
+        # Namespace was deleted, mark as failed
+        environment_crud.update_environment_status(
+            db=db,
+            environment=environment,
+            status=EnvironmentStatus.FAILED,
+            error_message="Namespace no longer exists"
+        )
+
+        if installation_id:
+            github_service.update_pr_status(
+                installation_id=installation_id,
+                repo_full_name=repo.full_name,
+                commit_sha=pr.head["sha"],
+                state="failure",
+                description="Environment namespace not found",
+                context="ephemera/environment"
+            )
+
+        logger.error(f"Namespace {environment.namespace} not found for update")
 
 
 async def handle_pull_request_reopened(payload: PullRequestWebhook, db: Session):
