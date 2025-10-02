@@ -101,8 +101,9 @@ This usually takes 1-2 minutes. You'll receive another comment when it's ready!
             target_url=env_url
         )
 
-    # TODO: Queue environment creation task (Celery)
-    logger.info(f"TODO: Queue environment creation task for {environment.namespace}")
+    # Note: Background task provisioning will be implemented in future release
+    # See: https://github.com/sabiut/ephemera/issues (Celery worker implementation)
+    logger.info(f"Environment {environment.namespace} ready for provisioning")
 
 
 async def handle_pull_request_closed(payload: PullRequestWebhook, db: Session):
@@ -151,8 +152,8 @@ All resources will be cleaned up within 1-2 minutes.
             comment=comment
         )
 
-    # TODO: Queue environment destruction task (Celery)
-    logger.info(f"TODO: Queue environment destruction task for {environment.namespace}")
+    # Note: Background task for cleanup will be implemented in future release
+    logger.info(f"Environment {environment.namespace} marked for cleanup")
 
 
 async def handle_pull_request_synchronize(payload: PullRequestWebhook, db: Session):
@@ -194,8 +195,8 @@ async def handle_pull_request_synchronize(payload: PullRequestWebhook, db: Sessi
             target_url=env_url
         )
 
-    # TODO: Queue environment update task (Celery)
-    logger.info(f"TODO: Queue environment update task for {environment.namespace}")
+    # Note: Background task for updates will be implemented in future release
+    logger.info(f"Environment {environment.namespace} ready for update")
 
 
 async def handle_pull_request_reopened(payload: PullRequestWebhook, db: Session):

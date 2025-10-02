@@ -33,3 +33,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local development files
+TODO.md
+NOTES.md
