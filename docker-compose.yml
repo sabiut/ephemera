@@ -35,5 +35,37 @@ services:
       - postgres
       - redis
 
+  celery_worker:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    command: celery -A app.core.celery_app worker --loglevel=info --queues=environment,cleanup
+    volumes:
+      - ./api:/app
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ephemera
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - ./api/.env
+    depends_on:
+      - postgres
+      - redis
+
+  celery_beat:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    command: celery -A app.core.celery_app beat --loglevel=info
+    volumes:
+      - ./api:/app
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ephemera
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - ./api/.env
+    depends_on:
+      - postgres
+      - redis
+
 volumes:
   postgres_data:

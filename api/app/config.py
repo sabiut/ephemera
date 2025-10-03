@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import Optional
+from pydantic import model_validator
 
 class Settings(BaseSettings):
     # Database
@@ -7,6 +9,10 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str
+
+    # Celery
+    celery_broker_url: Optional[str] = None
+    celery_result_backend: Optional[str] = None
 
     # GitHub
     github_app_id: str
@@ -26,6 +32,15 @@ class Settings(BaseSettings):
     aws_region: str = "us-west-2"
     aws_account_id: str
 
+    @model_validator(mode='after')
+    def set_celery_defaults(self):
+        """Set Celery URLs to Redis URL if not provided"""
+        if not self.celery_broker_url:
+            self.celery_broker_url = self.redis_url
+        if not self.celery_result_backend:
+            self.celery_result_backend = self.redis_url
+        return self
+
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -33,3 +48,6 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings():
     return Settings()
+
+# Global settings instance
+settings = get_settings()

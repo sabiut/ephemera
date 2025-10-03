@@ -177,7 +177,7 @@ curl http://localhost:8000/api/v1/environments/ | jq .
 - [x] REST API for environment management
 - [x] Kubernetes provisioning service
 - [x] Webhook-K8s integration (namespace lifecycle)
-- [ ] Celery workers for async tasks
+- [x] Celery workers for async tasks
 - [ ] Application deployment to namespaces
 - [ ] DNS and ingress automation
 - [ ] Production deployment (AWS EKS)
@@ -191,6 +191,7 @@ See [TODO.md](TODO.md) for detailed development tasks (local file, not tracked i
 - [GitHub Integration Summary](docs/github-integration-summary.md)
 - [Database Integration](docs/database-integration-summary.md)
 - [Webhook-K8s Integration](docs/webhook-k8s-integration.md)
+- [Celery Integration](docs/celery-integration.md)
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Current State](docs/current-state.md)
 

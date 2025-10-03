@@ -20,18 +20,25 @@ class KubernetesService:
 
     def __init__(self):
         """Initialize Kubernetes client"""
+        self.enabled = False
+        self.core_v1 = None
+        self.apps_v1 = None
+
         try:
             # Try to load in-cluster config first (for production)
             config.load_incluster_config()
             logger.info("Loaded in-cluster Kubernetes configuration")
+            self.enabled = True
         except config.ConfigException:
             # Fall back to kubeconfig file (for development)
             try:
                 config.load_kube_config()
                 logger.info("Loaded Kubernetes configuration from kubeconfig")
+                self.enabled = True
             except config.ConfigException as e:
-                logger.error(f"Failed to load Kubernetes configuration: {e}")
-                raise
+                logger.warning(f"Failed to load Kubernetes configuration: {e}")
+                logger.warning("Kubernetes operations will be disabled. This is expected in local development.")
+                return
 
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
@@ -51,6 +58,10 @@ class KubernetesService:
         Returns:
             True if successful, False otherwise
         """
+        if not self.enabled:
+            logger.warning(f"Kubernetes is disabled, skipping namespace creation: {namespace}")
+            return False
+
         try:
             # Prepare namespace metadata
             metadata = client.V1ObjectMeta(
@@ -88,6 +99,10 @@ class KubernetesService:
         Returns:
             True if successful, False otherwise
         """
+        if not self.enabled:
+            logger.warning(f"Kubernetes is disabled, skipping namespace deletion: {namespace}")
+            return False
+
         try:
             self.core_v1.delete_namespace(name=namespace)
             logger.info(f"Deleted namespace: {namespace}")
@@ -113,6 +128,10 @@ class KubernetesService:
         Returns:
             True if namespace exists, False otherwise
         """
+        if not self.enabled:
+            logger.warning(f"Kubernetes is disabled, cannot check namespace: {namespace}")
+            return False
+
         try:
             self.core_v1.read_namespace(name=namespace)
             return True
@@ -141,6 +160,10 @@ class KubernetesService:
         Returns:
             True if successful, False otherwise
         """
+        if not self.enabled:
+            logger.warning(f"Kubernetes is disabled, skipping resource quota creation: {namespace}")
+            return False
+
         try:
             quota = client.V1ResourceQuota(
                 metadata=client.V1ObjectMeta(
@@ -180,6 +203,10 @@ class KubernetesService:
         Returns:
             Status string or None if not found
         """
+        if not self.enabled:
+            logger.warning(f"Kubernetes is disabled, cannot get namespace status: {namespace}")
+            return None
+
         try:
             ns = self.core_v1.read_namespace(name=namespace)
             return ns.status.phase
