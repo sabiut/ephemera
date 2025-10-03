@@ -34,6 +34,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
 # Local development files
 TODO.md
 NOTES.md
