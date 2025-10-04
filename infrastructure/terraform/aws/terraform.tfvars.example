@@ -1,0 +1,35 @@
+# Copy this file to terraform.tfvars and update with your values
+# terraform.tfvars is gitignored and will not be committed
+
+# AWS Configuration
+aws_region = "us-west-2"
+environment = "dev"
+owner       = "your-name"
+
+# EKS Configuration
+cluster_version = "1.28"
+
+# Node Configuration
+node_instance_type = "t3.small"      # Use t3.small for cost optimization
+node_desired_size  = 1               # Start with 1 node for testing
+node_min_size      = 1
+node_max_size      = 3
+use_spot_instances = true            # Use spot instances for 66% cost savings
+
+# Database Configuration
+db_instance_class = "db.t3.micro"    # Free tier eligible
+db_name          = "ephemera"
+db_username      = "ephemera_admin"
+
+# Redis Configuration
+redis_node_type = "cache.t3.micro"   # Smallest instance type
+
+# Cost Estimate (with these settings):
+# - EKS Control Plane: $0.10/hr = $72/month
+# - 1x t3.small spot: ~$0.007/hr = $5/month
+# - db.t3.micro: $0.017/hr = $12/month (FREE with free tier)
+# - cache.t3.micro: $0.017/hr = $12/month
+# - NAT Gateway: $0.045/hr = $32/month
+# Total: ~$133/month (or ~$101/month with free tier)
+#
+# For 4-hour test: ~$0.68 (with free tier)
