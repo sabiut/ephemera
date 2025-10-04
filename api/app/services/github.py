@@ -41,18 +41,14 @@ class GitHubService:
         Returns:
             Authenticated PyGithub client or None if not configured
         """
-        if not self.private_key:
-            logger.error("Cannot create GitHub client: private key not configured")
+        if not self.integration:
+            logger.error("Cannot create GitHub client: GitHub integration not configured")
             return None
 
-        # Get installation access token
-        auth = Auth.AppInstallationAuth(
-            app_id=self.app_id,
-            private_key=self.private_key,
-            installation_id=installation_id
-        )
+        # Get installation access token using integration
+        token = self.integration.get_access_token(installation_id).token
 
-        return Github(auth=auth)
+        return Github(token)
 
     def post_comment_to_pr(
         self,
