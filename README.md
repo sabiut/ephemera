@@ -212,7 +212,9 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 - **Database**: PostgreSQL 15
 - **ORM**: SQLAlchemy 2.0
 - **Migrations**: Alembic
+- **Task Queue**: Celery with Redis broker
 - **Cache/Queue**: Redis 7
+- **Orchestration**: Kubernetes
 - **Container**: Docker & Docker Compose
 
 ## License
