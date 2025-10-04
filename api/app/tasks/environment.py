@@ -16,6 +16,7 @@ from app.core.celery_app import celery_app
 from app.database import SessionLocal
 from app.services.kubernetes import kubernetes_service
 from app.services.github import github_service
+from app.services.deployment import deployment_service
 from app.crud import environment as environment_crud
 from app.models.environment import EnvironmentStatus
 
@@ -98,6 +99,25 @@ def provision_environment(
             pod_limit="10"
         )
 
+        # Deploy application from docker-compose.yml if GitHub credentials provided
+        deployed_services = []
+        if installation_id and repo_full_name and commit_sha:
+            logger.info(f"Deploying application to namespace {environment.namespace}")
+
+            deployment_result = deployment_service.deploy_application(
+                installation_id=installation_id,
+                repo_full_name=repo_full_name,
+                namespace=environment.namespace,
+                ref=commit_sha
+            )
+
+            if deployment_result.get("success"):
+                deployed_services = deployment_result.get("services", [])
+                logger.info(f"Deployed {len(deployed_services)} services: {', '.join(deployed_services)}")
+            else:
+                # Log warning but don't fail - namespace still created
+                logger.warning(f"Failed to deploy application: {deployment_result.get('error')}")
+
         # Update environment status to ready
         environment_crud.update_environment_status(
             db=self.db,
@@ -122,14 +142,21 @@ def provision_environment(
             )
 
             if pr_number:
+                # Build deployment info section
+                deployment_info = ""
+                if deployed_services:
+                    services_list = "\n".join([f"- {service}" for service in deployed_services])
+                    deployment_info = f"\n**Deployed Services**:\n{services_list}\n"
+                elif installation_id and repo_full_name:
+                    deployment_info = "\n⚠️ **Note**: No docker-compose.yml found. Namespace created but no application deployed.\n"
+
                 comment = f"""## Ephemera Environment Ready
 
 Your preview environment has been created!
 
 **Environment URL**: {env_url}
 **Namespace**: `{environment.namespace}`
-**Status**: Ready
-
+**Status**: Ready{deployment_info}
 ---
 *Powered by Ephemera*
 """
