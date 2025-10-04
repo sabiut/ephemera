@@ -12,6 +12,7 @@
 - **Database Tracking** - Full lifecycle tracking with PostgreSQL and SQLAlchemy
 - **REST API** - Query and manage environments programmatically
 - **Containerized** - Docker-based development and deployment
+- **Async Task Processing** - Celery workers for background job processing
 
 ## Quick Start
 
