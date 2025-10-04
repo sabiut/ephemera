@@ -1,0 +1,45 @@
+# GCP Configuration
+gcp_project_id = "your-gcp-project-id"
+gcp_region     = "us-central1" # Iowa (low cost region)
+
+# Environment
+environment = "dev"
+owner       = "your-name"
+
+# GKE Configuration
+cluster_version        = "1.28"
+node_machine_type      = "e2-small"        # 2 vCPU, 2GB RAM - cost optimized
+node_disk_size_gb      = 30
+node_min_count         = 1                 # Minimum nodes per zone
+node_max_count         = 3                 # Maximum nodes per zone
+use_preemptible_nodes  = true              # Use preemptible VMs (up to 80% cheaper)
+
+# Cloud SQL Configuration
+db_tier     = "db-f1-micro"  # Shared CPU, 0.6GB RAM - free tier eligible
+db_name     = "ephemera"
+db_username = "ephemera"
+
+# Memorystore (Redis) Configuration
+redis_tier      = "BASIC"  # Single node, no replication
+redis_memory_gb = 1        # Minimum size
+
+# Cost Optimization Notes:
+# - e2-small nodes: ~$0.03/hour = ~$22/month per node
+# - db-f1-micro: Free tier eligible (up to 1 instance)
+# - Preemptible nodes: Save up to 80% on compute costs
+# - BASIC Redis tier: Single node, cheaper than STANDARD_HA
+# - us-central1 region: One of the cheapest GCP regions
+#
+# Estimated monthly cost (1 node, preemptible):
+# - GKE nodes (1 x e2-small preemptible): ~$5/month
+# - Cloud SQL (db-f1-micro): FREE (free tier)
+# - Memorystore (1GB BASIC): ~$26/month
+# - Networking: ~$5/month
+# Total: ~$36/month
+#
+# For testing (4 hours):
+# - GKE: ~$0.01
+# - Cloud SQL: FREE
+# - Memorystore: ~$0.15
+# - Networking: ~$0.01
+# Total: ~$0.17 for 4-hour test
