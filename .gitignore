@@ -29,7 +29,15 @@ Thumbs.db
 # Terraform
 *.tfstate
 *.tfstate.*
+*.tfstate.backup
 .terraform/
+.terraform.lock.hcl
+terraform.tfvars
+*.tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
 # Logs
 *.log
