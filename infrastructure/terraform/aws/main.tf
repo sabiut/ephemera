@@ -41,7 +41,7 @@ data "aws_caller_identity" "current" {}
 
 # Local variables
 locals {
-  cluster_name = "ephemera-${var.environment}"
+  cluster_name = "eph-${var.environment}"
 
   common_tags = {
     Project     = "Ephemera"
