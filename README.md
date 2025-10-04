@@ -9,9 +9,12 @@
 
 - **Automatic PR Environments** - Creates isolated preview environment for each pull request
 - **GitHub Integration** - Seamless GitHub App integration with webhook support
+- **Kubernetes Native** - Deploys to AWS EKS with namespace isolation
+- **Multi-Cloud Ready** - Terraform modules for AWS and GCP deployment
 - **Database Tracking** - Full lifecycle tracking with PostgreSQL and SQLAlchemy
 - **REST API** - Query and manage environments programmatically
 - **Containerized** - Docker-based development and deployment
+- **Cost Optimized** - Spot instances and auto-scaling for minimal cloud spend
 
 ## Quick Start
 
