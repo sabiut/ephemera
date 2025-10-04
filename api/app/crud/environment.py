@@ -10,6 +10,11 @@ def get_environment_by_id(db: Session, environment_id: int) -> Optional[Environm
     return db.query(Environment).filter(Environment.id == environment_id).first()
 
 
+def get_environment(db: Session, environment_id: int) -> Optional[Environment]:
+    """Alias for get_environment_by_id for backward compatibility"""
+    return get_environment_by_id(db, environment_id)
+
+
 def get_environment_by_pr(
     db: Session,
     repository_full_name: str,
