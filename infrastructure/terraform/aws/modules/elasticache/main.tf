@@ -40,8 +40,8 @@ resource "aws_elasticache_parameter_group" "main" {
 
 # ElastiCache Replication Group
 resource "aws_elasticache_replication_group" "main" {
-  replication_group_id       = "${var.cluster_name}-redis"
-  replication_group_description = "Redis for Ephemera ${var.environment}"
+  replication_group_id = "${var.cluster_name}-redis"
+  description          = "Redis for Ephemera ${var.environment}"
 
   engine               = "redis"
   engine_version       = "7.0"
