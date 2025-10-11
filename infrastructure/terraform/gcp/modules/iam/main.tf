@@ -55,4 +55,7 @@ resource "google_service_account_iam_member" "workload_identity_binding" {
   service_account_id = google_service_account.workload.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[default/ephemera-api]"
+
+  # This depends on the GKE cluster existing first
+  depends_on = [var.gke_cluster_id]
 }

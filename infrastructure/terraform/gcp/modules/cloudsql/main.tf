@@ -35,7 +35,7 @@ resource "google_sql_database_instance" "postgres" {
     ip_configuration {
       ipv4_enabled    = false
       private_network = var.network
-      require_ssl     = true
+      ssl_mode        = "ENCRYPTED_ONLY"
     }
 
     # Maintenance window

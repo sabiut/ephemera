@@ -118,3 +118,17 @@ module "elasticache" {
   redis_node_type    = var.redis_node_type
   tags               = local.common_tags
 }
+
+# Network Load Balancer Module for nginx-ingress
+module "nlb" {
+  source = "./modules/nlb"
+
+  cluster_name       = local.cluster_name
+  vpc_id             = module.vpc.vpc_id
+  public_subnet_ids  = module.vpc.public_subnet_ids
+  http_nodeport      = 30080
+  https_nodeport     = 30443
+  tags               = local.common_tags
+
+  depends_on = [module.eks]
+}
