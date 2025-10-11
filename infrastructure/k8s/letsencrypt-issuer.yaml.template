@@ -5,7 +5,7 @@ metadata:
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: your-email@example.com  # Replace with your email
+    email: ${LETSENCRYPT_EMAIL}  # Will be replaced from .env
     privateKeySecretRef:
       name: letsencrypt-prod
     solvers:
@@ -20,7 +20,7 @@ metadata:
 spec:
   acme:
     server: https://acme-staging-v02.api.letsencrypt.org/directory
-    email: your-email@example.com  # Replace with your email
+    email: ${LETSENCRYPT_EMAIL}  # Will be replaced from .env
     privateKeySecretRef:
       name: letsencrypt-staging
     solvers:

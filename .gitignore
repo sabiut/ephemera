@@ -57,3 +57,6 @@ AWS-COST-OPTIMIZATION.md
 # GCP service account keys
 gke-service-account-key.json
 github-actions-key.json
+
+# Generated Kubernetes manifests
+infrastructure/k8s/*-actual.yaml
