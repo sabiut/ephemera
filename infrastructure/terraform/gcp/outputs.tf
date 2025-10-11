@@ -91,7 +91,7 @@ output "next_steps" {
 
     Next steps:
     1. Configure kubectl:
-       ${self.configure_kubectl}
+       gcloud container clusters get-credentials ${module.gke.cluster_name} --region ${var.gcp_region} --project ${var.gcp_project_id}
 
     2. Get database password from Secret Manager:
        gcloud secrets versions access latest --secret="${module.cloudsql.password_secret_name}"

@@ -77,6 +77,10 @@ resource "google_container_cluster" "primary" {
   binary_authorization {
     evaluation_mode = "DISABLED"
   }
+
+  # IMPORTANT: Disable deletion protection for easier cleanup in dev/test
+  # Set to true for production environments
+  deletion_protection = false
 }
 
 # Managed node pool

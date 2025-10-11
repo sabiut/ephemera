@@ -50,5 +50,10 @@ celerybeat.pid
 TODO.md
 NOTES.md
 PRODUCTION-ROADMAP.md
+PRODUCTION-DEPLOYMENT-GUIDE.md
 TERRAFORM-GUIDE.md
 AWS-COST-OPTIMIZATION.md
+
+# GCP service account keys
+gke-service-account-key.json
+github-actions-key.json

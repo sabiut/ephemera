@@ -78,46 +78,49 @@ module "vpc" {
 module "iam" {
   source = "./modules/iam"
 
-  project_id   = var.gcp_project_id
-  cluster_name = local.cluster_name
-  environment  = var.environment
+  project_id     = var.gcp_project_id
+  cluster_name   = local.cluster_name
+  environment    = var.environment
+  gke_cluster_id = module.gke.cluster_id
 }
 
 # GKE Module
 module "gke" {
   source = "./modules/gke"
 
-  project_id         = var.gcp_project_id
-  cluster_name       = local.cluster_name
-  cluster_version    = var.cluster_version
-  environment        = var.environment
-  region             = var.gcp_region
-  zones              = local.zones
-  network            = module.vpc.network_name
-  subnetwork         = module.vpc.subnet_name
-  pod_ip_range_name  = module.vpc.pod_ip_range_name
-  svc_ip_range_name  = module.vpc.svc_ip_range_name
-  node_machine_type  = var.node_machine_type
-  node_disk_size_gb  = var.node_disk_size_gb
-  node_min_count     = var.node_min_count
-  node_max_count     = var.node_max_count
-  use_preemptible    = var.use_preemptible_nodes
-  labels             = local.common_labels
+  project_id            = var.gcp_project_id
+  cluster_name          = local.cluster_name
+  cluster_version       = var.cluster_version
+  environment           = var.environment
+  region                = var.gcp_region
+  zones                 = local.zones
+  network               = module.vpc.network_name
+  subnetwork            = module.vpc.subnet_name
+  pod_ip_range_name     = module.vpc.pod_ip_range_name
+  svc_ip_range_name     = module.vpc.svc_ip_range_name
+  service_account_email = module.iam.service_account_email
+  node_machine_type     = var.node_machine_type
+  node_disk_size_gb     = var.node_disk_size_gb
+  node_min_count        = var.node_min_count
+  node_max_count        = var.node_max_count
+  use_preemptible       = var.use_preemptible_nodes
+  labels                = local.common_labels
 }
 
 # Cloud SQL Module
 module "cloudsql" {
   source = "./modules/cloudsql"
 
-  project_id       = var.gcp_project_id
-  cluster_name     = local.cluster_name
-  environment      = var.environment
-  region           = var.gcp_region
-  network          = module.vpc.network_id
-  db_tier          = var.db_tier
-  db_name          = var.db_name
-  db_username      = var.db_username
-  labels           = local.common_labels
+  project_id              = var.gcp_project_id
+  cluster_name            = local.cluster_name
+  environment             = var.environment
+  region                  = var.gcp_region
+  network                 = module.vpc.network_id
+  private_vpc_connection  = module.vpc.private_vpc_connection
+  db_tier                 = var.db_tier
+  db_name                 = var.db_name
+  db_username             = var.db_username
+  labels                  = local.common_labels
 }
 
 # Memorystore (Redis) Module

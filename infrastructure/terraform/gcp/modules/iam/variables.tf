@@ -12,3 +12,9 @@ variable "environment" {
   description = "Environment name"
   type        = string
 }
+
+variable "gke_cluster_id" {
+  description = "GKE cluster ID to create dependency"
+  type        = string
+  default     = ""
+}

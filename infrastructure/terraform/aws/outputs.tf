@@ -79,3 +79,24 @@ output "get_redis_auth_token_command" {
   description = "Command to retrieve Redis auth token"
   value       = "aws secretsmanager get-secret-value --secret-id ${module.elasticache.auth_token_secret_arn} --query SecretString --output text"
 }
+
+# NLB Outputs
+output "nlb_dns_name" {
+  description = "DNS name of the Network Load Balancer for nginx-ingress"
+  value       = module.nlb.nlb_dns_name
+}
+
+output "nlb_zone_id" {
+  description = "Route53 zone ID of the NLB (for DNS alias records)"
+  value       = module.nlb.nlb_zone_id
+}
+
+output "ingress_url_http" {
+  description = "HTTP URL to access nginx-ingress through NLB"
+  value       = "http://${module.nlb.nlb_dns_name}"
+}
+
+output "ingress_url_https" {
+  description = "HTTPS URL to access nginx-ingress through NLB"
+  value       = "https://${module.nlb.nlb_dns_name}"
+}
