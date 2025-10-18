@@ -29,6 +29,13 @@ resource "google_project_iam_member" "gke_resource_metadata_writer" {
   member  = "serviceAccount:${google_service_account.gke.email}"
 }
 
+# Grant Artifact Registry reader for pulling container images
+resource "google_project_iam_member" "gke_artifact_registry_reader" {
+  project = var.project_id
+  role    = "roles/artifactregistry.reader"
+  member  = "serviceAccount:${google_service_account.gke.email}"
+}
+
 # Service account for workload identity (pods)
 resource "google_service_account" "workload" {
   account_id   = "${var.cluster_name}-workload-sa"
@@ -58,4 +65,46 @@ resource "google_service_account_iam_member" "workload_identity_binding" {
 
   # This depends on the GKE cluster existing first
   depends_on = [var.gke_cluster_id]
+}
+
+# Service account for GitHub Actions kubectl runner
+resource "google_service_account" "kubectl_runner" {
+  account_id   = "gke-kubectl-runner"
+  display_name = "Service Account for GitHub Actions kubectl runner"
+  project      = var.project_id
+}
+
+# Grant GKE cluster developer permissions for basic cluster access
+resource "google_project_iam_member" "kubectl_runner_container_developer" {
+  project = var.project_id
+  role    = "roles/container.developer"
+  member  = "serviceAccount:${google_service_account.kubectl_runner.email}"
+}
+
+# Grant GKE cluster admin permissions for managing Kubernetes resources (ClusterRoles, etc.)
+resource "google_project_iam_member" "kubectl_runner_container_admin" {
+  project = var.project_id
+  role    = "roles/container.admin"
+  member  = "serviceAccount:${google_service_account.kubectl_runner.email}"
+}
+
+# Grant storage admin for GCR/Artifact Registry
+resource "google_project_iam_member" "kubectl_runner_storage_admin" {
+  project = var.project_id
+  role    = "roles/storage.admin"
+  member  = "serviceAccount:${google_service_account.kubectl_runner.email}"
+}
+
+# Grant Artifact Registry writer for pushing images
+resource "google_project_iam_member" "kubectl_runner_artifact_writer" {
+  project = var.project_id
+  role    = "roles/artifactregistry.writer"
+  member  = "serviceAccount:${google_service_account.kubectl_runner.email}"
+}
+
+# Grant Artifact Registry repo admin for creating repositories
+resource "google_project_iam_member" "kubectl_runner_artifact_admin" {
+  project = var.project_id
+  role    = "roles/artifactregistry.repoAdmin"
+  member  = "serviceAccount:${google_service_account.kubectl_runner.email}"
 }
