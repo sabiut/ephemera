@@ -101,6 +101,7 @@ def provision_environment(
 
         # Deploy application from docker-compose.yml if GitHub credentials provided
         deployed_services = []
+        service_urls = {}
         if installation_id and repo_full_name and commit_sha:
             logger.info(f"Deploying application to namespace {environment.namespace}")
 
@@ -113,7 +114,10 @@ def provision_environment(
 
             if deployment_result.get("success"):
                 deployed_services = deployment_result.get("services", [])
+                service_urls = deployment_result.get("service_urls", {})
                 logger.info(f"Deployed {len(deployed_services)} services: {', '.join(deployed_services)}")
+                if service_urls:
+                    logger.info(f"Service URLs: {service_urls}")
             else:
                 # Log warning but don't fail - namespace still created
                 logger.warning(f"Failed to deploy application: {deployment_result.get('error')}")
@@ -145,8 +149,19 @@ def provision_environment(
                 # Build deployment info section
                 deployment_info = ""
                 if deployed_services:
-                    services_list = "\n".join([f"- {service}" for service in deployed_services])
-                    deployment_info = f"\n**Deployed Services**:\n{services_list}\n"
+                    # Build service URLs section
+                    if service_urls:
+                        services_with_urls = []
+                        for service in deployed_services:
+                            if service in service_urls:
+                                services_with_urls.append(f"- **{service}**: {service_urls[service]}")
+                            else:
+                                services_with_urls.append(f"- {service}")
+                        services_list = "\n".join(services_with_urls)
+                        deployment_info = f"\n**Deployed Services**:\n{services_list}\n"
+                    else:
+                        services_list = "\n".join([f"- {service}" for service in deployed_services])
+                        deployment_info = f"\n**Deployed Services**:\n{services_list}\n"
                 elif installation_id and repo_full_name:
                     deployment_info = "\n⚠️ **Note**: No docker-compose.yml found. Namespace created but no application deployed.\n"
 
@@ -154,7 +169,6 @@ def provision_environment(
 
 Your preview environment has been created!
 
-**Environment URL**: {env_url}
 **Namespace**: `{environment.namespace}`
 **Status**: Ready{deployment_info}
 ---

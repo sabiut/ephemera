@@ -46,17 +46,38 @@ override.tf.json
 celerybeat-schedule
 celerybeat.pid
 
-# Local development files
+# Local development files (private notes and planning docs)
 TODO.md
 NOTES.md
 PRODUCTION-ROADMAP.md
 PRODUCTION-DEPLOYMENT-GUIDE.md
 TERRAFORM-GUIDE.md
 AWS-COST-OPTIMIZATION.md
+PRIVATE-*.md
+*-PRIVATE.md
+INTERNAL-*.md
 
 # GCP service account keys
 gke-service-account-key.json
 github-actions-key.json
 
-# Generated Kubernetes manifests
+# Generated Kubernetes manifests (secrets for all cloud providers)
 infrastructure/k8s/*-actual.yaml
+infrastructure/k8s/*/secret.yaml
+infrastructure/k8s/ephemera-*/secret.yaml
+letsencrypt-issuer.yaml
+TODO-DEPLOYMENT.md
+
+# GitHub secrets documentation (contains sensitive setup info)
+.github/SECRETS.md
+
+# Cloud-specific service account keys and credentials
+# GCP
+gcp-credentials.json
+*-gcp-key.json
+# AWS
+.aws/credentials
+aws-credentials.json
+# Azure
+.azure/credentials
+azure-credentials.json

@@ -13,6 +13,9 @@ resource "google_redis_instance" "cache" {
   authorized_network = var.network
   connect_mode       = "PRIVATE_SERVICE_ACCESS"
 
+  # Ensure private service connection is established first
+  depends_on = [var.private_vpc_connection]
+
   # Redis configuration
   redis_configs = {
     maxmemory-policy = "allkeys-lru"

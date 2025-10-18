@@ -1,36 +1,52 @@
-# Kubernetes Manifests
+# Kubernetes Deployments
+
+This directory contains Kubernetes manifests for deploying both Ephemera itself and the infrastructure components.
+
+## Directory Structure
+
+```
+infrastructure/k8s/
+├── README.md                    # This file
+│
+├── ephemera/                    # GCP/GKE deployment (✅ READY)
+│   ├── namespace.yaml
+│   ├── configmap.yaml
+│   ├── secret.yaml (gitignored)
+│   ├── api-deployment.yaml
+│   ├── celery-worker-deployment.yaml
+│   ├── celery-beat-deployment.yaml
+│   ├── api-service.yaml
+│   ├── api-ingress.yaml
+│   └── README.md
+│
+├── ephemera-aws/                # AWS/EKS deployment (🚧 PLANNED)
+│   └── README.md
+│
+├── ephemera-azure/              # Azure/AKS deployment (🚧 PLANNED)
+│   └── README.md
+│
+├── letsencrypt-issuer.yaml      # Let's Encrypt ClusterIssuer
+├── nginx-ingress-values.yaml    # nginx-ingress Helm values
+└── cert-manager-values.yaml     # cert-manager Helm values
+```
+
+See [MULTI_CLOUD_ARCHITECTURE.md](../../MULTI_CLOUD_ARCHITECTURE.md) for the complete multi-cloud strategy.
 
 ## Let's Encrypt Certificate Issuers
 
-### Setup
+See [LETSENCRYPT_SETUP.md](LETSENCRYPT_SETUP.md) for detailed setup instructions.
 
-Before applying the cert-manager ClusterIssuers, you need to replace the email placeholder:
-
-```bash
-# Load email from .env
-source ../../api/.env
-
-# Generate the actual YAML from template
-envsubst < letsencrypt-issuer.yaml.template > letsencrypt-issuer-actual.yaml
-
-# Apply to cluster
-kubectl apply -f letsencrypt-issuer-actual.yaml
-```
-
-Or do it in one command:
+### Quick Setup
 
 ```bash
-# From project root
-export LETSENCRYPT_EMAIL=$(grep LETSENCRYPT_EMAIL api/.env | cut -d'=' -f2)
-envsubst < infrastructure/k8s/letsencrypt-issuer.yaml.template | kubectl apply -f -
+# Generate and apply ClusterIssuer with your email from .env
+LETSENCRYPT_EMAIL=$(grep LETSENCRYPT_EMAIL api/.env | cut -d'=' -f2) \
+  envsubst < infrastructure/k8s/letsencrypt-issuer.yaml.template \
+  | kubectl apply -f -
 ```
 
-### Files
+### Security Note
 
-- `letsencrypt-issuer.yaml` - Generic template (committed to git)
-- `letsencrypt-issuer.yaml.template` - Template with ${LETSENCRYPT_EMAIL} variable
-- `letsencrypt-issuer-actual.yaml` - Generated file (gitignored, not committed)
-
-### Note
-
-The email address is stored in `api/.env` as `LETSENCRYPT_EMAIL` and is not committed to the repository for privacy.
+✅ Email is stored in `api/.env` (gitignored)
+✅ Template file uses `${LETSENCRYPT_EMAIL}` placeholder
+✅ No personal information committed to repository

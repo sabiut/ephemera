@@ -39,6 +39,6 @@ output "svc_ip_range_name" {
 }
 
 output "private_vpc_connection" {
-  description = "Private VPC connection for Cloud SQL"
-  value       = google_service_networking_connection.private_vpc_connection.network
+  description = "Private VPC connection for Cloud SQL and Memorystore (use in depends_on)"
+  value       = google_service_networking_connection.private_vpc_connection
 }
