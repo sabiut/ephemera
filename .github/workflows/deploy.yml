@@ -38,6 +38,11 @@ jobs:
       with:
         install_components: 'gke-gcloud-auth-plugin'
 
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_wrapper: false
+
     - name: Configure Docker for Artifact Registry
       run: |
         gcloud auth configure-docker us-central1-docker.pkg.dev
@@ -71,6 +76,9 @@ jobs:
     - name: Get infrastructure connection strings from Terraform
       run: |
         cd infrastructure/terraform/gcp
+
+        # Initialize Terraform to read state
+        terraform init
 
         # Get Redis connection info
         REDIS_HOST=$(terraform output -raw redis_host)
