@@ -68,23 +68,43 @@ jobs:
         docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:${{ github.sha }}
         docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:latest
 
+    - name: Get infrastructure connection strings from Terraform
+      run: |
+        cd infrastructure/terraform/gcp
+
+        # Get Redis connection info
+        REDIS_HOST=$(terraform output -raw redis_host)
+        REDIS_PORT=$(terraform output -raw redis_port)
+        export REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+
+        # Get PostgreSQL connection info
+        DB_HOST=$(terraform output -raw cloudsql_private_ip)
+        DB_NAME=$(terraform output -raw cloudsql_database_name)
+        DB_USER=$(terraform output -raw cloudsql_username)
+        DB_PASSWORD=$(gcloud secrets versions access latest --secret="ephemera-dev-db-password" --project="${{ env.GCP_PROJECT_ID }}")
+        export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
+
+        # Export to GitHub environment
+        echo "REDIS_URL=${REDIS_URL}" >> $GITHUB_ENV
+        echo "DATABASE_URL=${DATABASE_URL}" >> $GITHUB_ENV
+
     - name: Apply Kubernetes manifests
       run: |
         kubectl apply -f infrastructure/k8s/ephemera/namespace.yaml
         kubectl apply -f infrastructure/k8s/ephemera/configmap.yaml
 
-        # Create secret from GitHub secrets if it doesn't exist
-        kubectl get secret ephemera-secrets -n ephemera-system || \
+        # Create secret from Terraform outputs and GitHub secrets
         kubectl create secret generic ephemera-secrets -n ephemera-system \
-          --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-          --from-literal=REDIS_URL="${{ secrets.REDIS_URL }}" \
-          --from-literal=CELERY_BROKER_URL="${{ secrets.REDIS_URL }}" \
-          --from-literal=CELERY_RESULT_BACKEND="${{ secrets.REDIS_URL }}" \
+          --from-literal=DATABASE_URL="${{ env.DATABASE_URL }}" \
+          --from-literal=REDIS_URL="${{ env.REDIS_URL }}" \
+          --from-literal=CELERY_BROKER_URL="${{ env.REDIS_URL }}" \
+          --from-literal=CELERY_RESULT_BACKEND="${{ env.REDIS_URL }}" \
           --from-literal=GITHUB_APP_ID="${{ secrets.APP_ID }}" \
           --from-literal=GITHUB_APP_CLIENTID="${{ secrets.APP_CLIENT_ID }}" \
           --from-literal=GITHUB_WEBHOOK_SECRET="${{ secrets.WEBHOOK_SECRET }}" \
           --from-literal=GITHUB_APP_PRIVATE_KEY="${{ secrets.APP_PRIVATE_KEY }}" \
-          --from-literal=SECRET_KEY="${{ secrets.SECRET_KEY }}"
+          --from-literal=SECRET_KEY="${{ secrets.SECRET_KEY }}" \
+          --dry-run=client -o yaml | kubectl apply -f -
 
         # Apply Let's Encrypt ClusterIssuer (generate from template with email)
         export LETSENCRYPT_EMAIL="${{ secrets.LETSENCRYPT_EMAIL }}"
