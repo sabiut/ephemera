@@ -151,3 +151,4 @@ jobs:
         kubectl get pods -n ephemera-system
         kubectl get ingress -n ephemera-system
         echo "Deployment complete! API should be accessible at https://ephemera-api.devpreview.app"
+# Trigger deployment
