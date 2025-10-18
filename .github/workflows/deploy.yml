@@ -92,9 +92,15 @@ jobs:
         DB_PASSWORD=$(gcloud secrets versions access latest --secret="ephemera-dev-db-password" --project="${{ env.GCP_PROJECT_ID }}" 2>/dev/null)
         DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
 
-        # Export to GitHub environment
-        echo "REDIS_URL=${REDIS_URL}" >> $GITHUB_ENV
-        echo "DATABASE_URL=${DATABASE_URL}" >> $GITHUB_ENV
+        # Export to GitHub environment using multiline format to handle special characters
+        {
+          echo "REDIS_URL<<EOF"
+          echo "${REDIS_URL}"
+          echo "EOF"
+          echo "DATABASE_URL<<EOF"
+          echo "${DATABASE_URL}"
+          echo "EOF"
+        } >> $GITHUB_ENV
 
     - name: Apply Kubernetes manifests
       run: |
