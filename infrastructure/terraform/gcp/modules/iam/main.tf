@@ -108,3 +108,10 @@ resource "google_project_iam_member" "kubectl_runner_artifact_admin" {
   role    = "roles/artifactregistry.repoAdmin"
   member  = "serviceAccount:${google_service_account.kubectl_runner.email}"
 }
+
+# Grant Secret Manager access for reading database password
+resource "google_project_iam_member" "kubectl_runner_secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.kubectl_runner.email}"
+}
