@@ -77,20 +77,20 @@ jobs:
       run: |
         cd infrastructure/terraform/gcp
 
-        # Initialize Terraform to read state
-        terraform init
+        # Initialize Terraform to read state (suppress warnings)
+        terraform init -input=false > /dev/null 2>&1
 
         # Get Redis connection info
-        REDIS_HOST=$(terraform output -raw redis_host)
-        REDIS_PORT=$(terraform output -raw redis_port)
-        export REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+        REDIS_HOST=$(terraform output -raw redis_host 2>/dev/null)
+        REDIS_PORT=$(terraform output -raw redis_port 2>/dev/null)
+        REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
 
         # Get PostgreSQL connection info
-        DB_HOST=$(terraform output -raw cloudsql_private_ip)
-        DB_NAME=$(terraform output -raw cloudsql_database_name)
-        DB_USER=$(terraform output -raw cloudsql_username)
-        DB_PASSWORD=$(gcloud secrets versions access latest --secret="ephemera-dev-db-password" --project="${{ env.GCP_PROJECT_ID }}")
-        export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
+        DB_HOST=$(terraform output -raw cloudsql_private_ip 2>/dev/null)
+        DB_NAME=$(terraform output -raw cloudsql_database_name 2>/dev/null)
+        DB_USER=$(terraform output -raw cloudsql_username 2>/dev/null)
+        DB_PASSWORD=$(gcloud secrets versions access latest --secret="ephemera-dev-db-password" --project="${{ env.GCP_PROJECT_ID }}" 2>/dev/null)
+        DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
 
         # Export to GitHub environment
         echo "REDIS_URL=${REDIS_URL}" >> $GITHUB_ENV
