@@ -20,11 +20,11 @@ terraform {
     }
   }
 
-  # Uncomment to use GCS backend for remote state (recommended for team)
-  # backend "gcs" {
-  #   bucket = "ephemera-terraform-state"
-  #   prefix = "gcp/terraform.tfstate"
-  # }
+  # GCS backend for remote state (allows GitHub Actions to access state)
+  backend "gcs" {
+    bucket = "ephemera-terraform-state-2025"
+    prefix = "gcp/terraform.tfstate"
+  }
 }
 
 provider "google" {
