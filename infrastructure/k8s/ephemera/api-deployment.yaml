@@ -21,7 +21,7 @@ spec:
       serviceAccountName: ephemera-api
       containers:
       - name: api
-        image: gcr.io/ephemera-dev-2025/ephemera-api:latest
+        image: us-central1-docker.pkg.dev/ephemera-dev-2025/ephemera/ephemera-api:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8000

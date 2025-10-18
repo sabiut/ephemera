@@ -17,7 +17,7 @@ env:
   GCP_PROJECT_ID: ephemera-dev-2025
   GKE_CLUSTER: ephemera-dev
   GKE_REGION: us-central1
-  GCR_REGISTRY: gcr.io/ephemera-dev-2025
+  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev/ephemera-dev-2025/ephemera
 
 jobs:
   build-and-deploy:
@@ -36,9 +36,9 @@ jobs:
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v1
 
-    - name: Configure Docker for GCR
+    - name: Configure Docker for Artifact Registry
       run: |
-        gcloud auth configure-docker
+        gcloud auth configure-docker us-central1-docker.pkg.dev
 
     - name: Get GKE credentials
       run: |
@@ -48,21 +48,21 @@ jobs:
 
     - name: Build and push API image
       run: |
-        docker build -f api/Dockerfile -t ${{ env.GCR_REGISTRY }}/ephemera-api:${{ github.sha }} -t ${{ env.GCR_REGISTRY }}/ephemera-api:latest ./api
-        docker push ${{ env.GCR_REGISTRY }}/ephemera-api:${{ github.sha }}
-        docker push ${{ env.GCR_REGISTRY }}/ephemera-api:latest
+        docker build -f api/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-api:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-api:latest ./api
+        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-api:${{ github.sha }}
+        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-api:latest
 
     - name: Build and push Celery Worker image
       run: |
-        docker build -f api/Dockerfile -t ${{ env.GCR_REGISTRY }}/ephemera-celery-worker:${{ github.sha }} -t ${{ env.GCR_REGISTRY }}/ephemera-celery-worker:latest ./api
-        docker push ${{ env.GCR_REGISTRY }}/ephemera-celery-worker:${{ github.sha }}
-        docker push ${{ env.GCR_REGISTRY }}/ephemera-celery-worker:latest
+        docker build -f api/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:latest ./api
+        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:${{ github.sha }}
+        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:latest
 
     - name: Build and push Celery Beat image
       run: |
-        docker build -f api/Dockerfile -t ${{ env.GCR_REGISTRY }}/ephemera-celery-beat:${{ github.sha }} -t ${{ env.GCR_REGISTRY }}/ephemera-celery-beat:latest ./api
-        docker push ${{ env.GCR_REGISTRY }}/ephemera-celery-beat:${{ github.sha }}
-        docker push ${{ env.GCR_REGISTRY }}/ephemera-celery-beat:latest
+        docker build -f api/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:latest ./api
+        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:${{ github.sha }}
+        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:latest
 
     - name: Apply Kubernetes manifests
       run: |
@@ -94,9 +94,9 @@ jobs:
 
     - name: Update deployment images
       run: |
-        kubectl set image deployment/ephemera-api api=${{ env.GCR_REGISTRY }}/ephemera-api:${{ github.sha }} -n ephemera-system
-        kubectl set image deployment/ephemera-celery-worker celery-worker=${{ env.GCR_REGISTRY }}/ephemera-celery-worker:${{ github.sha }} -n ephemera-system
-        kubectl set image deployment/ephemera-celery-beat celery-beat=${{ env.GCR_REGISTRY }}/ephemera-celery-beat:${{ github.sha }} -n ephemera-system
+        kubectl set image deployment/ephemera-api api=${{ env.ARTIFACT_REGISTRY }}/ephemera-api:${{ github.sha }} -n ephemera-system
+        kubectl set image deployment/ephemera-celery-worker celery-worker=${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:${{ github.sha }} -n ephemera-system
+        kubectl set image deployment/ephemera-celery-beat celery-beat=${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:${{ github.sha }} -n ephemera-system
 
     - name: Wait for rollout to complete
       run: |

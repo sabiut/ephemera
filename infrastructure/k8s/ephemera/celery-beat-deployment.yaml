@@ -21,7 +21,7 @@ spec:
       serviceAccountName: ephemera-api
       containers:
       - name: celery-beat
-        image: gcr.io/ephemera-dev-2025/ephemera-celery-beat:latest
+        image: us-central1-docker.pkg.dev/ephemera-dev-2025/ephemera/ephemera-celery-beat:latest
         imagePullPolicy: Always
         command: ["celery"]
         args:
