@@ -127,12 +127,13 @@ module "cloudsql" {
 module "memorystore" {
   source = "./modules/memorystore"
 
-  project_id       = var.gcp_project_id
-  cluster_name     = local.cluster_name
-  environment      = var.environment
-  region           = var.gcp_region
-  network          = module.vpc.network_id
-  redis_tier       = var.redis_tier
-  redis_memory_gb  = var.redis_memory_gb
-  labels           = local.common_labels
+  project_id             = var.gcp_project_id
+  cluster_name           = local.cluster_name
+  environment            = var.environment
+  region                 = var.gcp_region
+  network                = module.vpc.network_id
+  private_vpc_connection = module.vpc.private_vpc_connection
+  redis_tier             = var.redis_tier
+  redis_memory_gb        = var.redis_memory_gb
+  labels                 = local.common_labels
 }

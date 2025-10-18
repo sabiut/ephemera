@@ -6,6 +6,7 @@ This service handles:
 - Parsing docker-compose.yml format
 - Converting compose services to Kubernetes Deployments and Services
 - Applying manifests to namespaces
+- Generating Ingress resources for HTTPS access
 """
 
 import logging
@@ -21,16 +22,18 @@ logger = logging.getLogger(__name__)
 class DeploymentService:
     """Service for deploying applications to Kubernetes from docker-compose.yml"""
 
-    def __init__(self, kubernetes_service, github_service):
+    def __init__(self, kubernetes_service, github_service, base_domain: str = "devpreview.app"):
         """
         Initialize deployment service.
 
         Args:
             kubernetes_service: KubernetesService instance
             github_service: GitHubService instance
+            base_domain: Base domain for generating environment URLs (e.g., "devpreview.app")
         """
         self.k8s = kubernetes_service
         self.github = github_service
+        self.base_domain = base_domain
 
     def fetch_docker_compose(
         self,
@@ -149,6 +152,16 @@ class DeploymentService:
                     app_name=app_name
                 )
                 manifests.append(service)
+
+                # Generate Ingress manifest for HTTPS access
+                ingress = self._create_ingress(
+                    service_name=service_name,
+                    service_config=service_config,
+                    namespace=namespace,
+                    app_name=app_name
+                )
+                if ingress:
+                    manifests.append(ingress)
 
         logger.info(f"Generated {len(manifests)} Kubernetes manifests")
         return manifests
@@ -291,6 +304,94 @@ class DeploymentService:
 
         return service
 
+    def _create_ingress(
+        self,
+        service_name: str,
+        service_config: Dict[str, Any],
+        namespace: str,
+        app_name: str
+    ) -> Dict[str, Any]:
+        """Create Kubernetes Ingress manifest from compose service."""
+        # Extract the first exposed port (typically the main HTTP port)
+        ports_config = service_config.get("ports", [])
+
+        # Find the target port
+        target_port = None
+        for port in ports_config:
+            if isinstance(port, str):
+                parts = port.split(":")
+                target_port = int(parts[-1])
+                break
+            elif isinstance(port, int):
+                target_port = port
+                break
+
+        if not target_port:
+            logger.warning(f"No port found for service {service_name}, cannot create ingress")
+            return None
+
+        # Generate hostname: pr-{pr-number}-{service}.{base_domain}
+        # Extract PR number from namespace (format: pr-123-reponame)
+        namespace_parts = namespace.split("-")
+        pr_number = namespace_parts[1] if len(namespace_parts) >= 2 else "unknown"
+
+        # Generate hostname
+        hostname = f"pr-{pr_number}-{service_name}.{self.base_domain}"
+
+        # Build ingress manifest
+        ingress = {
+            "apiVersion": "networking.k8s.io/v1",
+            "kind": "Ingress",
+            "metadata": {
+                "name": f"{service_name}-ingress",
+                "namespace": namespace,
+                "labels": {
+                    "app": app_name,
+                    "service": service_name
+                },
+                "annotations": {
+                    # cert-manager annotation for automatic TLS
+                    "cert-manager.io/cluster-issuer": "letsencrypt-prod",
+                    # nginx ingress annotations
+                    "nginx.ingress.kubernetes.io/ssl-redirect": "true",
+                    "nginx.ingress.kubernetes.io/force-ssl-redirect": "true"
+                }
+            },
+            "spec": {
+                "ingressClassName": "nginx",
+                "tls": [
+                    {
+                        "hosts": [hostname],
+                        "secretName": f"{service_name}-tls"
+                    }
+                ],
+                "rules": [
+                    {
+                        "host": hostname,
+                        "http": {
+                            "paths": [
+                                {
+                                    "path": "/",
+                                    "pathType": "Prefix",
+                                    "backend": {
+                                        "service": {
+                                            "name": service_name,
+                                            "port": {
+                                                "number": target_port
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+        logger.info(f"Generated Ingress for {service_name} at https://{hostname}")
+        return ingress
+
     def apply_manifest(self, manifest: Dict[str, Any]) -> bool:
         """
         Apply a Kubernetes manifest to the cluster.
@@ -423,6 +524,72 @@ class DeploymentService:
                     else:
                         raise
 
+            elif kind == "Ingress":
+                # Build Ingress using proper Kubernetes objects
+                networking_v1 = client.NetworkingV1Api()
+
+                ingress = client.V1Ingress(
+                    api_version="networking.k8s.io/v1",
+                    kind="Ingress",
+                    metadata=client.V1ObjectMeta(
+                        name=name,
+                        namespace=namespace,
+                        labels=metadata.get("labels", {}),
+                        annotations=metadata.get("annotations", {})
+                    ),
+                    spec=client.V1IngressSpec(
+                        ingress_class_name=spec.get("ingressClassName"),
+                        tls=[
+                            client.V1IngressTLS(
+                                hosts=tls_item.get("hosts", []),
+                                secret_name=tls_item.get("secretName")
+                            )
+                            for tls_item in spec.get("tls", [])
+                        ],
+                        rules=[
+                            client.V1IngressRule(
+                                host=rule.get("host"),
+                                http=client.V1HTTPIngressRuleValue(
+                                    paths=[
+                                        client.V1HTTPIngressPath(
+                                            path=path.get("path"),
+                                            path_type=path.get("pathType"),
+                                            backend=client.V1IngressBackend(
+                                                service=client.V1IngressServiceBackend(
+                                                    name=path.get("backend", {}).get("service", {}).get("name"),
+                                                    port=client.V1ServiceBackendPort(
+                                                        number=path.get("backend", {}).get("service", {}).get("port", {}).get("number")
+                                                    )
+                                                )
+                                            )
+                                        )
+                                        for path in rule.get("http", {}).get("paths", [])
+                                    ]
+                                )
+                            )
+                            for rule in spec.get("rules", [])
+                        ]
+                    )
+                )
+
+                try:
+                    networking_v1.create_namespaced_ingress(
+                        namespace=namespace,
+                        body=ingress
+                    )
+                    logger.info(f"Created Ingress {name} in namespace {namespace}")
+                except ApiException as e:
+                    if e.status == 409:
+                        # Already exists, update it
+                        networking_v1.patch_namespaced_ingress(
+                            name=name,
+                            namespace=namespace,
+                            body=ingress
+                        )
+                        logger.info(f"Updated Ingress {name} in namespace {namespace}")
+                    else:
+                        raise
+
             else:
                 logger.warning(f"Unsupported manifest kind: {kind}")
                 return False
@@ -488,11 +655,21 @@ class DeploymentService:
             # Apply manifests
             applied_count = 0
             failed_manifests = []
+            service_urls = {}
 
             for manifest in manifests:
                 success = self.apply_manifest(manifest)
                 if success:
                     applied_count += 1
+
+                    # Track service URLs from Ingress manifests
+                    if manifest.get("kind") == "Ingress":
+                        service_name = manifest["metadata"]["labels"].get("service")
+                        rules = manifest.get("spec", {}).get("rules", [])
+                        if rules and service_name:
+                            hostname = rules[0].get("host")
+                            if hostname:
+                                service_urls[service_name] = f"https://{hostname}"
                 else:
                     failed_manifests.append(
                         f"{manifest['kind']}/{manifest['metadata']['name']}"
@@ -509,7 +686,8 @@ class DeploymentService:
             return {
                 "success": True,
                 "applied_count": applied_count,
-                "services": list(compose.get("services", {}).keys())
+                "services": list(compose.get("services", {}).keys()),
+                "service_urls": service_urls
             }
 
         except Exception as e:
@@ -524,8 +702,8 @@ class DeploymentService:
 deployment_service = None
 
 
-def init_deployment_service(kubernetes_service, github_service):
+def init_deployment_service(kubernetes_service, github_service, base_domain: str = "devpreview.app"):
     """Initialize the deployment service singleton."""
     global deployment_service
-    deployment_service = DeploymentService(kubernetes_service, github_service)
+    deployment_service = DeploymentService(kubernetes_service, github_service, base_domain)
     return deployment_service

@@ -23,6 +23,11 @@ variable "network" {
   type        = string
 }
 
+variable "private_vpc_connection" {
+  description = "Private VPC connection for service networking"
+  type        = any
+}
+
 variable "redis_tier" {
   description = "Memorystore tier (BASIC or STANDARD_HA)"
   type        = string

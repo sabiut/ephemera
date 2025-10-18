@@ -45,6 +45,6 @@ variable "labels" {
 }
 
 variable "private_vpc_connection" {
-  description = "Private VPC connection for Cloud SQL"
-  type        = string
+  description = "Private VPC connection resource (for depends_on)"
+  type        = any
 }

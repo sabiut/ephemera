@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ephemera-celery-beat
+  namespace: ephemera-system
+  labels:
+    app: ephemera
+    component: celery-beat
+spec:
+  replicas: 1  # Only 1 replica for beat scheduler
+  selector:
+    matchLabels:
+      app: ephemera
+      component: celery-beat
+  template:
+    metadata:
+      labels:
+        app: ephemera
+        component: celery-beat
+    spec:
+      serviceAccountName: ephemera-api
+      containers:
+      - name: celery-beat
+        image: gcr.io/ephemera-dev-2025/ephemera-celery-beat:latest
+        imagePullPolicy: Always
+        command: ["celery"]
+        args:
+          - "-A"
+          - "app.core.celery_app"
+          - "beat"
+          - "--loglevel=info"
+        env:
+        # Non-sensitive config from ConfigMap
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: ENVIRONMENT
+        - name: BASE_DOMAIN
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: BASE_DOMAIN
+        - name: KUBECONFIG_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: KUBECONFIG_PATH
+        - name: CLUSTER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: CLUSTER_NAME
+        - name: AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: AWS_REGION
+        - name: AWS_ACCOUNT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: AWS_ACCOUNT_ID
+        # Sensitive config from Secret
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: DATABASE_URL
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: REDIS_URL
+        - name: CELERY_BROKER_URL
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: CELERY_BROKER_URL
+        - name: CELERY_RESULT_BACKEND
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: CELERY_RESULT_BACKEND
+        - name: GITHUB_APP_ID
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: GITHUB_APP_ID
+        - name: GITHUB_APP_CLIENTID
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: GITHUB_APP_CLIENTID
+        - name: GITHUB_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: GITHUB_WEBHOOK_SECRET
+        - name: GITHUB_APP_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: GITHUB_APP_PRIVATE_KEY
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: SECRET_KEY
+        - name: GITHUB_APP_PRIVATE_KEY_PATH
+          value: "/tmp/github-app-key.pem"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
