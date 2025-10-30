@@ -106,4 +106,13 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   network                 = google_compute_network.main.id
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_ip_address.name]
+
+  # Wait 60 seconds after deletion to allow GCP to clean up
+  deletion_policy = "ABANDON"
+
+  # Ensure this is deleted last during terraform destroy
+  # Cloud SQL and Memorystore must be destroyed before this connection
+  lifecycle {
+    create_before_destroy = false
+  }
 }
