@@ -4,7 +4,7 @@ This directory will contain Kubernetes manifests to deploy the Ephemera platform
 
 ## Status
 
-🚧 **Coming Soon** - Azure deployment is planned for Q2 2025.
+**Coming Soon** - Azure deployment is planned for Q2 2025.
 
 ## Planned Architecture
 
