@@ -8,7 +8,7 @@ This directory contains Kubernetes manifests for deploying both Ephemera itself 
 infrastructure/k8s/
 ├── README.md                    # This file
 │
-├── ephemera/                    # GCP/GKE deployment (✅ READY)
+├── ephemera/                    # GCP/GKE deployment (READY)
 │   ├── namespace.yaml
 │   ├── configmap.yaml
 │   ├── secret.yaml (gitignored)
@@ -19,10 +19,10 @@ infrastructure/k8s/
 │   ├── api-ingress.yaml
 │   └── README.md
 │
-├── ephemera-aws/                # AWS/EKS deployment (🚧 PLANNED)
+├── ephemera-aws/                # AWS/EKS deployment (PLANNED)
 │   └── README.md
 │
-├── ephemera-azure/              # Azure/AKS deployment (🚧 PLANNED)
+├── ephemera-azure/              # Azure/AKS deployment (PLANNED)
 │   └── README.md
 │
 ├── letsencrypt-issuer.yaml      # Let's Encrypt ClusterIssuer
@@ -47,6 +47,6 @@ LETSENCRYPT_EMAIL=$(grep LETSENCRYPT_EMAIL api/.env | cut -d'=' -f2) \
 
 ### Security Note
 
-✅ Email is stored in `api/.env` (gitignored)
-✅ Template file uses `${LETSENCRYPT_EMAIL}` placeholder
-✅ No personal information committed to repository
+- Email is stored in `api/.env` (gitignored)
+- Template file uses `${LETSENCRYPT_EMAIL}` placeholder
+- No personal information committed to repository

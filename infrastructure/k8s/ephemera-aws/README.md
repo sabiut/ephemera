@@ -4,7 +4,7 @@ This directory will contain Kubernetes manifests to deploy the Ephemera platform
 
 ## Status
 
-🚧 **Coming Soon** - AWS deployment is planned for Q4 2024 - Q1 2025.
+**Coming Soon** - AWS deployment is planned for Q4 2024 - Q1 2025.
 
 ## Planned Architecture
 
