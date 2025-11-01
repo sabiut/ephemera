@@ -157,7 +157,14 @@ jobs:
 
     - name: Wait for rollout to complete
       run: |
-        kubectl rollout status deployment/ephemera-api -n ephemera-system --timeout=5m
+        kubectl rollout status deployment/ephemera-api -n ephemera-system --timeout=5m || {
+          echo "Rollout failed! Checking pod status and logs..."
+          kubectl get pods -n ephemera-system
+          kubectl describe pods -n ephemera-system -l component=api
+          echo "=== Recent logs from failing pods ==="
+          kubectl logs -n ephemera-system -l component=api --tail=50 --all-containers=true || true
+          exit 1
+        }
         kubectl rollout status deployment/ephemera-celery-worker -n ephemera-system --timeout=5m
         kubectl rollout status deployment/ephemera-celery-beat -n ephemera-system --timeout=5m
 
