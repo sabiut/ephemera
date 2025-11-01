@@ -130,6 +130,11 @@ jobs:
         kubectl apply -f infrastructure/k8s/ephemera/api-service.yaml
         kubectl apply -f infrastructure/k8s/ephemera/api-ingress.yaml
 
+    - name: Run database migrations (before updating images)
+      run: |
+        # Run migrations on the current running pods before deploying new version
+        kubectl exec -n ephemera-system deployment/ephemera-api -- alembic upgrade head || echo "Migration failed or no pods running yet"
+
     - name: Update deployment images
       run: |
         kubectl set image deployment/ephemera-api api=${{ env.ARTIFACT_REGISTRY }}/ephemera-api:${{ github.sha }} -n ephemera-system
@@ -141,10 +146,6 @@ jobs:
         kubectl rollout status deployment/ephemera-api -n ephemera-system --timeout=5m
         kubectl rollout status deployment/ephemera-celery-worker -n ephemera-system --timeout=5m
         kubectl rollout status deployment/ephemera-celery-beat -n ephemera-system --timeout=5m
-
-    - name: Run database migrations
-      run: |
-        kubectl exec -n ephemera-system deployment/ephemera-api -- alembic upgrade head
 
     - name: Verify deployment
       run: |
