@@ -102,6 +102,23 @@ jobs:
           echo "EOF"
         } >> $GITHUB_ENV
 
+    - name: Install nginx-ingress controller
+      run: |
+        # Check if nginx-ingress is already installed
+        if ! kubectl get namespace ingress-nginx &> /dev/null; then
+          echo "Installing nginx-ingress controller..."
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.4/deploy/static/provider/cloud/deploy.yaml
+          # Wait for ingress controller to be ready
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=300s
+          echo "Waiting for LoadBalancer IP to be assigned..."
+          sleep 30
+        else
+          echo "nginx-ingress already installed"
+        fi
+
     - name: Install cert-manager
       run: |
         # Check if cert-manager is already installed
