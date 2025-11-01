@@ -89,7 +89,11 @@ jobs:
         DB_HOST=$(terraform output -raw cloudsql_private_ip 2>/dev/null)
         DB_NAME=$(terraform output -raw cloudsql_database_name 2>/dev/null)
         DB_USER=$(terraform output -raw cloudsql_username 2>/dev/null)
-        DB_PASSWORD=$(gcloud secrets versions access latest --secret="ephemera-dev-db-password" --project="${{ env.GCP_PROJECT_ID }}" 2>/dev/null)
+        DB_PASSWORD_RAW=$(gcloud secrets versions access latest --secret="ephemera-dev-db-password" --project="${{ env.GCP_PROJECT_ID }}" 2>/dev/null)
+
+        # URL-encode the password to handle special characters
+        DB_PASSWORD=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${DB_PASSWORD_RAW}', safe=''))")
+
         DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
 
         # Export to GitHub environment using multiline format to handle special characters
