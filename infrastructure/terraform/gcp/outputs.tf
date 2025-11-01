@@ -103,3 +103,12 @@ output "next_steps" {
     4. Deploy application to GKE cluster
   EOT
 }
+output "artifact_registry_repository" {
+  description = "Artifact Registry repository name"
+  value       = module.artifact_registry.repository_name
+}
+
+output "artifact_registry_url" {
+  description = "Full URL to push Docker images"
+  value       = module.artifact_registry.repository_url
+}

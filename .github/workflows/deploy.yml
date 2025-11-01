@@ -102,6 +102,20 @@ jobs:
           echo "EOF"
         } >> $GITHUB_ENV
 
+    - name: Install cert-manager
+      run: |
+        # Check if cert-manager is already installed
+        if ! kubectl get namespace cert-manager &> /dev/null; then
+          echo "Installing cert-manager..."
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.3/cert-manager.yaml
+          # Wait for cert-manager to be ready
+          kubectl wait --for=condition=Available --timeout=300s deployment/cert-manager -n cert-manager
+          kubectl wait --for=condition=Available --timeout=300s deployment/cert-manager-webhook -n cert-manager
+          kubectl wait --for=condition=Available --timeout=300s deployment/cert-manager-cainjector -n cert-manager
+        else
+          echo "cert-manager already installed"
+        fi
+
     - name: Apply Kubernetes manifests
       run: |
         kubectl apply -f infrastructure/k8s/ephemera/namespace.yaml
