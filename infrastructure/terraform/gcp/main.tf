@@ -137,3 +137,13 @@ module "memorystore" {
   redis_memory_gb        = var.redis_memory_gb
   labels                 = local.common_labels
 }
+
+# Artifact Registry Module
+module "artifact_registry" {
+  source = "./modules/artifact-registry"
+
+  project_id      = var.gcp_project_id
+  region          = var.gcp_region
+  repository_name = "ephemera"
+  labels          = local.common_labels
+}
