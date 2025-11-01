@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Response, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.database import get_db
 
@@ -13,8 +14,8 @@ async def health_check():
 async def readiness_check(response: Response, db: Session = Depends(get_db)):
     """Check if service is ready (DB connection, etc.)"""
     try:
-        # Test database connection
-        db.execute("SELECT 1")
+        # Test database connection (use text() for SQLAlchemy 2.x)
+        db.execute(text("SELECT 1"))
         return {"status": "ready"}
     except Exception as e:
         # Return 503 Service Unavailable if database is not ready
