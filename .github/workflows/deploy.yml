@@ -83,7 +83,11 @@ jobs:
         # Get Redis connection info
         REDIS_HOST=$(terraform output -raw redis_host 2>/dev/null)
         REDIS_PORT=$(terraform output -raw redis_port 2>/dev/null)
-        REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+        REDIS_AUTH=$(terraform output -raw redis_auth_string 2>/dev/null)
+
+        # Construct Redis URL with authentication and TLS
+        # Memorystore uses rediss:// for TLS encryption
+        REDIS_URL="rediss://:${REDIS_AUTH}@${REDIS_HOST}:${REDIS_PORT}/0"
 
         # Get PostgreSQL connection info
         DB_HOST=$(terraform output -raw cloudsql_private_ip 2>/dev/null)
