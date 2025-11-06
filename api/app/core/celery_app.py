@@ -7,8 +7,17 @@ This module configures Celery for async task processing, including:
 - Periodic cleanup jobs
 """
 
+import ssl
 from celery import Celery
 from app.config import settings
+
+# SSL configuration for Redis with TLS
+broker_use_ssl = {
+    'ssl_cert_reqs': ssl.CERT_NONE,
+}
+backend_use_ssl = {
+    'ssl_cert_reqs': ssl.CERT_NONE,
+}
 
 # Create Celery app
 celery_app = Celery(
@@ -36,6 +45,8 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     result_expires=3600,  # 1 hour
+    broker_use_ssl=broker_use_ssl,  # SSL config for Redis broker
+    redis_backend_use_ssl=backend_use_ssl,  # SSL config for Redis backend
     beat_schedule={
         "cleanup-stale-environments": {
             "task": "app.tasks.cleanup.cleanup_stale_environments",
