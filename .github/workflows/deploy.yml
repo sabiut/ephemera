@@ -81,19 +81,19 @@ jobs:
         terraform init -input=false > /dev/null 2>&1
 
         # Get Redis connection info
-        REDIS_HOST=$(terraform output -raw redis_host 2>/dev/null)
-        REDIS_PORT=$(terraform output -raw redis_port 2>/dev/null)
-        REDIS_AUTH=$(terraform output -raw redis_auth_string 2>/dev/null)
+        REDIS_HOST=$(terraform output -raw redis_host 2>/dev/null || echo "")
+        REDIS_PORT=$(terraform output -raw redis_port 2>/dev/null || echo "")
+        REDIS_AUTH=$(terraform output -raw redis_auth_string 2>/dev/null || echo "")
 
         # Construct Redis URL with authentication and TLS
         # Memorystore uses rediss:// for TLS encryption
         REDIS_URL="rediss://:${REDIS_AUTH}@${REDIS_HOST}:${REDIS_PORT}/0"
 
         # Get PostgreSQL connection info
-        DB_HOST=$(terraform output -raw cloudsql_private_ip 2>/dev/null)
-        DB_NAME=$(terraform output -raw cloudsql_database_name 2>/dev/null)
-        DB_USER=$(terraform output -raw cloudsql_username 2>/dev/null)
-        DB_PASSWORD_RAW=$(gcloud secrets versions access latest --secret="ephemera-dev-db-password" --project="${{ env.GCP_PROJECT_ID }}" 2>/dev/null)
+        DB_HOST=$(terraform output -raw cloudsql_private_ip 2>/dev/null || echo "")
+        DB_NAME=$(terraform output -raw cloudsql_database_name 2>/dev/null || echo "")
+        DB_USER=$(terraform output -raw cloudsql_username 2>/dev/null || echo "")
+        DB_PASSWORD_RAW=$(gcloud secrets versions access latest --secret="ephemera-dev-db-password" --project="${{ env.GCP_PROJECT_ID }}" 2>/dev/null || echo "")
 
         # URL-encode the password to handle special characters
         DB_PASSWORD=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${DB_PASSWORD_RAW}', safe=''))")
