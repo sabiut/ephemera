@@ -104,6 +104,23 @@ spec:
             secretKeyRef:
               name: ephemera-secrets
               key: SECRET_KEY
+        - name: GITHUB_OAUTH_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: GITHUB_OAUTH_CLIENT_ID
+        - name: GITHUB_OAUTH_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: GITHUB_OAUTH_CLIENT_SECRET
+        - name: GITHUB_OAUTH_REDIRECT_URI
+          value: "https://ephemera-api.devpreview.app/auth/github/callback"
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: ENCRYPTION_KEY
         - name: GITHUB_APP_PRIVATE_KEY_PATH
           value: "/tmp/github-app-key.pem"
         resources:

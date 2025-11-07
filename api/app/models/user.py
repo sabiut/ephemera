@@ -20,6 +20,8 @@ class User(Base):
 
     # Relationships
     environments = relationship("Environment", back_populates="owner")
+    cloud_credentials = relationship("CloudCredential", back_populates="user", cascade="all, delete-orphan")
+    api_tokens = relationship("APIToken", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.github_login}>"

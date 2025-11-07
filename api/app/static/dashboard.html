@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ephemera Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 1.8em;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        .section {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #5568d3;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .token-display {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            word-break: break-all;
+            margin: 15px 0;
+            position: relative;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+
+        .list {
+            list-style: none;
+        }
+
+        .list-item {
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .list-item:last-child {
+            border-bottom: none;
+        }
+
+        .badge {
+            background: #28a745;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+
+        .badge-inactive {
+            background: #dc3545;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+
+        textarea {
+            min-height: 150px;
+            font-family: monospace;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <h1>Ephemera Dashboard</h1>
+            <div class="user-info">
+                <img id="userAvatar" class="avatar" src="" alt="User avatar">
+                <span id="userName"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Cloud Credentials Section -->
+        <div class="section">
+            <h2>Cloud Credentials</h2>
+            <div id="credentialsList" class="loading">
+                <div class="spinner"></div>
+                <p>Loading credentials...</p>
+            </div>
+            <button class="btn" onclick="showAddCredentialForm()">Add Credentials</button>
+
+            <div id="addCredentialForm" class="hidden" style="margin-top: 20px;">
+                <h3>Add GCP Credentials</h3>
+                <div class="form-group">
+                    <label>Provider</label>
+                    <select id="credProvider">
+                        <option value="gcp">Google Cloud Platform (GCP)</option>
+                        <option value="aws">Amazon Web Services (AWS)</option>
+                        <option value="azure">Microsoft Azure</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Name (optional)</label>
+                    <input type="text" id="credName" placeholder="e.g., Production GCP">
+                </div>
+                <div class="form-group">
+                    <label>Service Account JSON</label>
+                    <textarea id="credJson" placeholder="Paste your GCP service account JSON here..."></textarea>
+                </div>
+                <button class="btn" onclick="addCredential()">Save Credentials</button>
+                <button class="btn btn-secondary" onclick="hideAddCredentialForm()">Cancel</button>
+            </div>
+        </div>
+
+        <!-- API Tokens Section -->
+        <div class="section">
+            <h2>API Tokens</h2>
+            <div id="tokensList" class="loading">
+                <div class="spinner"></div>
+                <p>Loading tokens...</p>
+            </div>
+            <button class="btn" onclick="generateToken()">Generate New Token</button>
+
+            <div id="newTokenDisplay" class="hidden" style="margin-top: 20px;">
+                <div class="alert alert-success">
+                    <strong>Token Created!</strong> Save this token now - you won't be able to see it again.
+                </div>
+                <div class="token-display">
+                    <code id="newTokenValue"></code>
+                    <button class="copy-btn" onclick="copyToken()">Copy</button>
+                </div>
+                <p><strong>Add this to your GitHub repository secrets as:</strong> <code>EPHEMERA_TOKEN</code></p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

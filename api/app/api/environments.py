@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 import logging
 
 from app.database import get_db
@@ -10,6 +10,8 @@ from app.crud import deployment as deployment_crud
 from app.schemas.environment import EnvironmentResponse, EnvironmentCreate
 from app.services.github import github_service
 from app.tasks.environment import provision_environment
+from app.api.dependencies import get_current_user_optional
+from app.models import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,13 +65,19 @@ async def get_environment_by_namespace(
 async def create_environment(
     env_data: EnvironmentCreate,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """
     Create a new preview environment for a PR.
-    Called by GitHub Actions workflow.
+    Called by GitHub Actions workflow with Bearer token authentication.
+
+    The authenticated user's cloud credentials will be used for provisioning.
     """
     logger.info(f"Creating environment for PR #{env_data.pr_number} in {env_data.repository_full_name}")
+
+    if current_user:
+        logger.info(f"Authenticated user: {current_user.github_login}")
 
     # Check if environment already exists
     existing_env = environment_crud.get_environment_by_pr(
