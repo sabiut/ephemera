@@ -63,6 +63,12 @@ output "redis_port" {
   value       = module.memorystore.redis_port
 }
 
+output "redis_auth_string" {
+  description = "Redis AUTH string for authentication"
+  value       = module.memorystore.redis_auth_string
+  sensitive   = true
+}
+
 output "redis_connection_string" {
   description = "Redis connection string"
   value       = "redis://${module.memorystore.redis_host}:${module.memorystore.redis_port}/0"
