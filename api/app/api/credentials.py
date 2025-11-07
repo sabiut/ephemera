@@ -175,3 +175,43 @@ def delete_credential(
     db.commit()
 
     return None
+
+
+@router.get("/gcp")
+def get_gcp_credentials(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get decrypted GCP credentials for the authenticated user.
+
+    This endpoint is used by GitHub Actions workflows to retrieve
+    credentials using an API token.
+
+    Returns the first active GCP credential for the user.
+    """
+    credential = (
+        db.query(CloudCredential)
+        .filter(
+            CloudCredential.user_id == current_user.id,
+            CloudCredential.provider == "gcp",
+            CloudCredential.is_active == True,
+        )
+        .first()
+    )
+
+    if not credential:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active GCP credentials found. Please add GCP credentials in the dashboard.",
+        )
+
+    # Decrypt and return credentials
+    decrypted_creds = decrypt_credentials(credential.credentials_encrypted)
+
+    return {
+        "provider": "gcp",
+        "credential_id": credential.id,
+        "name": credential.name,
+        "credentials_json": decrypted_creds,
+    }
