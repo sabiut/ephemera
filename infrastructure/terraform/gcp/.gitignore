@@ -1,1 +1,6 @@
 infrastructure/k8s/ephemera/secret.yaml
+
+# Environment variables with secrets
+.envrc
+.env
+terraform.tfvars

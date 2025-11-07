@@ -88,3 +88,52 @@ variable "redis_memory_gb" {
   type        = number
   default     = 1
 }
+
+# Application Secrets
+variable "secret_key" {
+  description = "Application secret key"
+  type        = string
+  sensitive   = true
+  default     = "change-me-in-production"
+}
+
+# GitHub App Credentials (Legacy)
+variable "github_app_id" {
+  description = "GitHub App ID"
+  type        = string
+  default     = "placeholder"
+}
+
+variable "github_app_clientid" {
+  description = "GitHub App Client ID"
+  type        = string
+  default     = "placeholder"
+}
+
+variable "github_webhook_secret" {
+  description = "GitHub Webhook Secret"
+  type        = string
+  sensitive   = true
+  default     = "placeholder"
+}
+
+variable "github_app_private_key" {
+  description = "GitHub App Private Key (PEM format)"
+  type        = string
+  sensitive   = true
+  default     = "placeholder"
+}
+
+# GitHub OAuth Credentials (New)
+variable "github_oauth_client_id" {
+  description = "GitHub OAuth App Client ID"
+  type        = string
+  default     = "placeholder-will-update-later"
+}
+
+variable "github_oauth_client_secret" {
+  description = "GitHub OAuth App Client Secret"
+  type        = string
+  sensitive   = true
+  default     = "placeholder-will-update-later"
+}
