@@ -73,6 +73,9 @@ resource "google_sql_database" "database" {
   name     = var.db_name
   instance = google_sql_database_instance.postgres.name
   project  = var.project_id
+
+  # Skip error if deletion fails (will be cleaned up when instance is deleted)
+  deletion_policy = "ABANDON"
 }
 
 # Random password
@@ -87,6 +90,9 @@ resource "google_sql_user" "user" {
   instance = google_sql_database_instance.postgres.name
   password = random_password.db_password.result
   project  = var.project_id
+
+  # Skip error if deletion fails (will be cleaned up when instance is deleted)
+  deletion_policy = "ABANDON"
 }
 
 # Store password in Secret Manager
