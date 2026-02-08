@@ -154,6 +154,16 @@ module "artifact_registry" {
   labels          = local.common_labels
 }
 
+# Static IP for Ingress LoadBalancer
+resource "google_compute_address" "ingress_ip" {
+  name         = "ephemera-ingress-ip"
+  region       = var.gcp_region
+  address_type = "EXTERNAL"
+  description  = "Static IP for Ephemera ingress controller"
+
+  labels = local.common_labels
+}
+
 # Kubernetes Secrets Module
 module "kubernetes_secrets" {
   source = "./modules/kubernetes-secrets"

@@ -6,7 +6,7 @@ resource "random_password" "encryption_key" {
   special = false
 }
 
-resource "kubernetes_secret" "ephemera_secrets" {
+resource "kubernetes_secret_v1" "ephemera_secrets" {
   metadata {
     name      = "ephemera-secrets"
     namespace = var.namespace
@@ -37,4 +37,11 @@ resource "kubernetes_secret" "ephemera_secrets" {
   }
 
   type = "Opaque"
+
+  lifecycle {
+    ignore_changes = [
+      metadata[0].annotations,
+      metadata[0].labels,
+    ]
+  }
 }
