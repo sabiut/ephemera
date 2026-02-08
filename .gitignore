@@ -61,7 +61,9 @@ INTERNAL-*.md
 
 # GCP service account keys
 gke-service-account-key.json
+gke-sa-key-temp.json
 github-actions-key.json
+*-sa-key*.json
 
 # Generated Kubernetes manifests (secrets for all cloud providers)
 infrastructure/k8s/*-actual.yaml

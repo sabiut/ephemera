@@ -13,269 +13,864 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f7fa;
+            background: #0a0a0a;
+            color: #e5e5e5;
+            min-height: 100vh;
+            display: flex;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 240px;
+            background: #111;
+            border-right: 1px solid #222;
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            z-index: 100;
+            transition: transform 0.3s ease;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid #222;
+        }
+
+        .sidebar-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            color: #fff;
+        }
+
+        .sidebar-logo svg {
+            width: 28px;
+            height: 28px;
+        }
+
+        .sidebar-logo span {
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: -0.3px;
+        }
+
+        .sidebar-nav {
+            flex: 1;
+            padding: 12px 0;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 20px;
+            color: #888;
+            text-decoration: none;
+            font-size: 14px;
+            transition: all 0.15s ease;
+            cursor: pointer;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+
+        .nav-item:hover {
+            color: #e5e5e5;
+            background: #1a1a1a;
+        }
+
+        .nav-item.active {
+            color: #fff;
+            background: #1a1a1a;
+            border-right: 2px solid #6366f1;
+        }
+
+        .nav-item svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .sidebar-footer {
+            padding: 16px 20px;
+            border-top: 1px solid #222;
+        }
+
+        .user-card {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 2px solid #333;
+        }
+
+        .user-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #e5e5e5;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .logout-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: none;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #888;
+            font-size: 13px;
+            cursor: pointer;
+            width: 100%;
+            transition: all 0.15s ease;
+        }
+
+        .logout-btn:hover {
+            color: #e5e5e5;
+            border-color: #555;
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            margin-left: 240px;
             min-height: 100vh;
         }
 
-        .header {
-            background: white;
-            padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
-        }
-
-        .header-content {
-            max-width: 1200px;
-            margin: 0 auto;
+        .page-header {
+            padding: 24px 32px;
+            border-bottom: 1px solid #222;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
-        h1 {
-            color: #333;
-            font-size: 1.8em;
+        .page-title {
+            font-size: 22px;
+            font-weight: 600;
+            color: #fff;
         }
 
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 15px;
+        .page-content {
+            padding: 24px 32px;
         }
 
-        .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
+        /* Stat Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 28px;
         }
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-
-        .section {
-            background: white;
-            padding: 30px;
+        .stat-card {
+            background: #151515;
+            border: 1px solid #222;
             border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
+            padding: 20px;
         }
 
-        h2 {
-            color: #333;
+        .stat-label {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        /* Cards */
+        .card {
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 10px;
             margin-bottom: 20px;
-            font-size: 1.5em;
         }
 
-        .btn {
-            background: #667eea;
-            color: white;
-            padding: 12px 24px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 1em;
-            transition: background 0.3s;
-        }
-
-        .btn:hover {
-            background: #5568d3;
-        }
-
-        .btn-secondary {
-            background: #6c757d;
-        }
-
-        .btn-secondary:hover {
-            background: #5a6268;
-        }
-
-        .token-display {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 6px;
-            font-family: monospace;
-            word-break: break-all;
-            margin: 15px 0;
-            position: relative;
-        }
-
-        .copy-btn {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.9em;
-        }
-
-        .list {
-            list-style: none;
-        }
-
-        .list-item {
-            padding: 15px;
-            border-bottom: 1px solid #e9ecef;
+        .card-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #222;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
-        .list-item:last-child {
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .card-body {
+            padding: 0;
+        }
+
+        /* Tables */
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table th {
+            text-align: left;
+            padding: 12px 20px;
+            font-size: 12px;
+            font-weight: 500;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #222;
+        }
+
+        .table td {
+            padding: 14px 20px;
+            font-size: 14px;
+            border-bottom: 1px solid #1a1a1a;
+        }
+
+        .table tr:last-child td {
             border-bottom: none;
         }
 
+        .table tr:hover td {
+            background: #1a1a1a;
+        }
+
+        /* Status Badges */
         .badge {
-            background: #28a745;
-            color: white;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.85em;
-        }
-
-        .badge-inactive {
-            background: #dc3545;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            color: #555;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 9999px;
+            font-size: 12px;
             font-weight: 500;
         }
 
-        input, textarea, select {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            font-size: 1em;
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
         }
 
-        textarea {
-            min-height: 150px;
-            font-family: monospace;
+        .badge-ready { background: #052e16; color: #4ade80; }
+        .badge-ready .badge-dot { background: #4ade80; }
+
+        .badge-provisioning { background: #422006; color: #fbbf24; }
+        .badge-provisioning .badge-dot { background: #fbbf24; }
+
+        .badge-pending { background: #172554; color: #60a5fa; }
+        .badge-pending .badge-dot { background: #60a5fa; }
+
+        .badge-updating { background: #172554; color: #60a5fa; }
+        .badge-updating .badge-dot { background: #60a5fa; }
+
+        .badge-failed { background: #450a0a; color: #f87171; }
+        .badge-failed .badge-dot { background: #f87171; }
+
+        .badge-destroying { background: #1c1917; color: #a8a29e; }
+        .badge-destroying .badge-dot { background: #a8a29e; }
+
+        .badge-destroyed { background: #1c1917; color: #78716c; }
+        .badge-destroyed .badge-dot { background: #78716c; }
+
+        .badge-active { background: #052e16; color: #4ade80; }
+        .badge-active .badge-dot { background: #4ade80; }
+
+        .badge-inactive { background: #450a0a; color: #f87171; }
+        .badge-inactive .badge-dot { background: #f87171; }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            border: none;
         }
 
-        .alert {
-            padding: 15px;
-            border-radius: 6px;
-            margin-bottom: 20px;
+        .btn-primary {
+            background: #6366f1;
+            color: #fff;
         }
 
-        .alert-success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+        .btn-primary:hover {
+            background: #5558e6;
         }
 
-        .alert-error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+        .btn-ghost {
+            background: transparent;
+            color: #888;
+            border: 1px solid #333;
         }
 
-        .hidden {
-            display: none;
+        .btn-ghost:hover {
+            color: #e5e5e5;
+            border-color: #555;
         }
 
-        .loading {
+        .btn-danger {
+            background: transparent;
+            color: #f87171;
+            border: 1px solid #7f1d1d;
+        }
+
+        .btn-danger:hover {
+            background: #7f1d1d;
+            color: #fca5a5;
+        }
+
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            padding: 48px 20px;
             text-align: center;
-            padding: 40px;
+        }
+
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            color: #333;
+            margin-bottom: 16px;
+        }
+
+        .empty-state p {
+            color: #555;
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 500px;
+            margin: 20px;
+        }
+
+        .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #222;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
             color: #666;
+            cursor: pointer;
+            padding: 4px;
+            font-size: 20px;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: #e5e5e5;
+        }
+
+        .modal-body {
+            padding: 24px;
+        }
+
+        .modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid #222;
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: #999;
+            margin-bottom: 6px;
+        }
+
+        .form-input,
+        .form-select,
+        .form-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: #e5e5e5;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.15s ease;
+        }
+
+        .form-input:focus,
+        .form-select:focus,
+        .form-textarea:focus {
+            outline: none;
+            border-color: #6366f1;
+        }
+
+        .form-textarea {
+            min-height: 120px;
+            font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+            font-size: 13px;
+            resize: vertical;
+        }
+
+        /* Token Display */
+        .token-box {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 14px 16px;
+            font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+            font-size: 13px;
+            word-break: break-all;
+            color: #4ade80;
+            position: relative;
+        }
+
+        .token-hint {
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: #1e1b4b;
+            border: 1px solid #312e81;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #a5b4fc;
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 300;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .toast {
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            animation: toast-in 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            max-width: 400px;
+        }
+
+        .toast-success {
+            background: #052e16;
+            color: #4ade80;
+            border: 1px solid #14532d;
+        }
+
+        .toast-error {
+            background: #450a0a;
+            color: #f87171;
+            border: 1px solid #7f1d1d;
+        }
+
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Loading */
+        .loading-spinner {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
         }
 
         .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
+            width: 24px;
+            height: 24px;
+            border: 2px solid #333;
+            border-top-color: #6366f1;
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
+            animation: spin 0.8s linear infinite;
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        /* Mono text */
+        .mono {
+            font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+            font-size: 13px;
+        }
+
+        .text-muted {
+            color: #555;
+        }
+
+        .text-sm {
+            font-size: 13px;
+        }
+
+        /* Hide all views by default */
+        .view { display: none; }
+        .view.active { display: block; }
+
+        /* Mobile hamburger */
+        .mobile-toggle {
+            display: none;
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            z-index: 150;
+            background: #222;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 8px;
+            cursor: pointer;
+            color: #e5e5e5;
+        }
+
+        .mobile-toggle svg { width: 20px; height: 20px; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .main {
+                margin-left: 0;
+            }
+
+            .mobile-toggle {
+                display: block;
+            }
+
+            .page-header {
+                padding: 16px 20px;
+                padding-left: 56px;
+            }
+
+            .page-content {
+                padding: 16px 20px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .table {
+                display: block;
+                overflow-x: auto;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="header-content">
-            <h1>Ephemera Dashboard</h1>
-            <div class="user-info">
-                <img id="userAvatar" class="avatar" src="" alt="User avatar">
-                <span id="userName"></span>
+    <!-- Mobile Menu Toggle -->
+    <button class="mobile-toggle" onclick="toggleSidebar()">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+    </button>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <a href="/dashboard" class="sidebar-logo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                </svg>
+                <span>Ephemera</span>
+            </a>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="#overview" class="nav-item active" data-view="overview">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+                </svg>
+                Overview
+            </a>
+            <a href="#environments" class="nav-item" data-view="environments">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
+                </svg>
+                Environments
+            </a>
+            <a href="#credentials" class="nav-item" data-view="credentials">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                </svg>
+                Credentials
+            </a>
+            <a href="#tokens" class="nav-item" data-view="tokens">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"/>
+                </svg>
+                API Tokens
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="user-card">
+                <img id="userAvatar" class="user-avatar" src="" alt="">
+                <span id="userName" class="user-name"></span>
+            </div>
+            <button class="logout-btn" onclick="logout()">
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                </svg>
+                Logout
+            </button>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+        <!-- ===== OVERVIEW VIEW ===== -->
+        <div id="view-overview" class="view active">
+            <div class="page-header">
+                <h1 class="page-title">Overview</h1>
+            </div>
+            <div class="page-content">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Environments</div>
+                        <div class="stat-value" id="statTotalEnvs">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Active</div>
+                        <div class="stat-value" id="statActiveEnvs">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Credentials</div>
+                        <div class="stat-value" id="statCredentials">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">API Tokens</div>
+                        <div class="stat-value" id="statTokens">-</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Recent Environments</span>
+                        <a href="#environments" class="btn btn-ghost btn-sm">View All</a>
+                    </div>
+                    <div class="card-body" id="recentEnvsTable">
+                        <div class="loading-spinner"><div class="spinner"></div></div>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
 
-    <div class="container">
-        <!-- Cloud Credentials Section -->
-        <div class="section">
-            <h2>Cloud Credentials</h2>
-            <div id="credentialsList" class="loading">
-                <div class="spinner"></div>
-                <p>Loading credentials...</p>
+        <!-- ===== ENVIRONMENTS VIEW ===== -->
+        <div id="view-environments" class="view">
+            <div class="page-header">
+                <h1 class="page-title">Environments</h1>
             </div>
-            <button class="btn" onclick="showAddCredentialForm()">Add Credentials</button>
+            <div class="page-content">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">All Environments</span>
+                        <span class="text-muted text-sm" id="envRefreshLabel">Auto-refreshes every 30s</span>
+                    </div>
+                    <div class="card-body" id="allEnvsTable">
+                        <div class="loading-spinner"><div class="spinner"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-            <div id="addCredentialForm" class="hidden" style="margin-top: 20px;">
-                <h3>Add GCP Credentials</h3>
+        <!-- ===== CREDENTIALS VIEW ===== -->
+        <div id="view-credentials" class="view">
+            <div class="page-header">
+                <h1 class="page-title">Cloud Credentials</h1>
+                <button class="btn btn-primary" onclick="openModal('credentialModal')">
+                    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Add Credentials
+                </button>
+            </div>
+            <div class="page-content">
+                <div class="card">
+                    <div class="card-body" id="credentialsList">
+                        <div class="loading-spinner"><div class="spinner"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== TOKENS VIEW ===== -->
+        <div id="view-tokens" class="view">
+            <div class="page-header">
+                <h1 class="page-title">API Tokens</h1>
+                <button class="btn btn-primary" onclick="openModal('tokenModal')">
+                    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Generate Token
+                </button>
+            </div>
+            <div class="page-content">
+                <div class="card">
+                    <div class="card-body" id="tokensList">
+                        <div class="loading-spinner"><div class="spinner"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Add Credential Modal -->
+    <div class="modal-overlay" id="credentialModal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title">Add Cloud Credentials</span>
+                <button class="modal-close" onclick="closeModal('credentialModal')">&times;</button>
+            </div>
+            <div class="modal-body">
                 <div class="form-group">
-                    <label>Provider</label>
-                    <select id="credProvider">
+                    <label class="form-label">Provider</label>
+                    <select id="credProvider" class="form-select">
                         <option value="gcp">Google Cloud Platform (GCP)</option>
                         <option value="aws">Amazon Web Services (AWS)</option>
                         <option value="azure">Microsoft Azure</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Name (optional)</label>
-                    <input type="text" id="credName" placeholder="e.g., Production GCP">
+                    <label class="form-label">Name (optional)</label>
+                    <input type="text" id="credName" class="form-input" placeholder="e.g., Production GCP">
                 </div>
                 <div class="form-group">
-                    <label>Service Account JSON</label>
-                    <textarea id="credJson" placeholder="Paste your GCP service account JSON here..."></textarea>
+                    <label class="form-label">Service Account JSON</label>
+                    <textarea id="credJson" class="form-textarea" placeholder="Paste your service account JSON here..."></textarea>
                 </div>
-                <button class="btn" onclick="addCredential()">Save Credentials</button>
-                <button class="btn btn-secondary" onclick="hideAddCredentialForm()">Cancel</button>
             </div>
-        </div>
-
-        <!-- API Tokens Section -->
-        <div class="section">
-            <h2>API Tokens</h2>
-            <div id="tokensList" class="loading">
-                <div class="spinner"></div>
-                <p>Loading tokens...</p>
-            </div>
-            <button class="btn" onclick="generateToken()">Generate New Token</button>
-
-            <div id="newTokenDisplay" class="hidden" style="margin-top: 20px;">
-                <div class="alert alert-success">
-                    <strong>Token Created!</strong> Save this token now - you won't be able to see it again.
-                </div>
-                <div class="token-display">
-                    <code id="newTokenValue"></code>
-                    <button class="copy-btn" onclick="copyToken()">Copy</button>
-                </div>
-                <p><strong>Add this to your GitHub repository secrets as:</strong> <code>EPHEMERA_TOKEN</code></p>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('credentialModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="addCredential()">Save Credentials</button>
             </div>
         </div>
     </div>
+
+    <!-- Generate Token Modal -->
+    <div class="modal-overlay" id="tokenModal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title">Generate API Token</span>
+                <button class="modal-close" onclick="closeModal('tokenModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Token Name</label>
+                    <input type="text" id="tokenName" class="form-input" placeholder="e.g., GitHub Actions - my-app">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description (optional)</label>
+                    <input type="text" id="tokenDesc" class="form-input" placeholder="What is this token for?">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('tokenModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="generateToken()">Generate</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Token Display Modal -->
+    <div class="modal-overlay" id="tokenDisplayModal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title">Token Created</span>
+                <button class="modal-close" onclick="closeModal('tokenDisplayModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="color: #999; margin-bottom: 16px;">Save this token now — you won't be able to see it again.</p>
+                <div class="token-box" id="newTokenValue"></div>
+                <div class="token-hint">
+                    Add this to your GitHub repository secrets as: <strong>EPHEMERA_TOKEN</strong>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('tokenDisplayModal')">Close</button>
+                <button class="btn btn-primary" onclick="copyToken()">
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                    </svg>
+                    Copy Token
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
 
     <script src="/static/dashboard.js"></script>
 </body>

@@ -110,12 +110,23 @@ jobs:
           echo "EOF"
         } >> $GITHUB_ENV
 
+    - name: Get static IP from Terraform
+      run: |
+        cd infrastructure/terraform/gcp
+        STATIC_IP=$(terraform output -raw ingress_ip 2>/dev/null || echo "")
+        echo "STATIC_IP=${STATIC_IP}" >> $GITHUB_ENV
+
     - name: Install nginx-ingress controller
       run: |
         # Check if nginx-ingress is already installed
         if ! kubectl get namespace ingress-nginx &> /dev/null; then
-          echo "Installing nginx-ingress controller..."
+          echo "Installing nginx-ingress controller with static IP: ${{ env.STATIC_IP }}"
           kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.4/deploy/static/provider/cloud/deploy.yaml
+
+          # Configure LoadBalancer to use static IP
+          kubectl patch service ingress-nginx-controller -n ingress-nginx \
+            -p '{"spec":{"loadBalancerIP":"${{ env.STATIC_IP }}"}}'
+
           # Wait for ingress controller to be ready
           kubectl wait --namespace ingress-nginx \
             --for=condition=ready pod \
@@ -125,6 +136,9 @@ jobs:
           sleep 30
         else
           echo "nginx-ingress already installed"
+          # Ensure static IP is configured even if already installed
+          kubectl patch service ingress-nginx-controller -n ingress-nginx \
+            -p '{"spec":{"loadBalancerIP":"${{ env.STATIC_IP }}"}}'
         fi
 
     - name: Install cert-manager

@@ -118,3 +118,8 @@ output "artifact_registry_url" {
   description = "Full URL to push Docker images"
   value       = module.artifact_registry.repository_url
 }
+
+output "ingress_ip" {
+  description = "Static IP address for ingress controller"
+  value       = google_compute_address.ingress_ip.address
+}

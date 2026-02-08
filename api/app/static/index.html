@@ -12,8 +12,8 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
             min-height: 100vh;
             display: flex;
             justify-content: center;
@@ -21,95 +21,142 @@
         }
 
         .container {
-            background: white;
-            padding: 60px 40px;
-            border-radius: 15px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
             text-align: center;
-            max-width: 500px;
+            max-width: 440px;
             width: 90%;
         }
 
+        .logo {
+            margin-bottom: 24px;
+        }
+
+        .logo svg {
+            width: 48px;
+            height: 48px;
+        }
+
         h1 {
-            color: #333;
-            font-size: 2.5em;
-            margin-bottom: 10px;
+            color: #fff;
+            font-size: 2.2em;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
         }
 
         .tagline {
             color: #666;
-            font-size: 1.2em;
+            font-size: 1.05em;
             margin-bottom: 40px;
+        }
+
+        .card {
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 36px 32px;
+            margin-bottom: 24px;
         }
 
         .feature-list {
             text-align: left;
-            margin: 30px 0;
-            padding: 0 20px;
+            margin-bottom: 32px;
         }
 
         .feature {
-            color: #555;
-            margin: 15px 0;
-            font-size: 1em;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #999;
+            font-size: 14px;
+            padding: 8px 0;
         }
 
-        .feature::before {
-            content: "✓ ";
-            color: #667eea;
-            font-weight: bold;
-            margin-right: 10px;
+        .feature-icon {
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+            color: #6366f1;
         }
 
         .github-login-btn {
-            background: #24292e;
-            color: white;
-            padding: 15px 40px;
+            background: #fff;
+            color: #0a0a0a;
+            padding: 12px 28px;
             border: none;
             border-radius: 8px;
-            font-size: 1.1em;
+            font-size: 15px;
+            font-weight: 500;
             cursor: pointer;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 10px;
-            transition: background 0.3s;
+            transition: all 0.15s ease;
+            width: 100%;
+            justify-content: center;
         }
 
         .github-login-btn:hover {
-            background: #1a1e22;
+            background: #e5e5e5;
         }
 
         .github-icon {
-            width: 24px;
-            height: 24px;
+            width: 20px;
+            height: 20px;
         }
 
         .footer {
-            margin-top: 30px;
-            color: #999;
-            font-size: 0.9em;
+            color: #444;
+            font-size: 13px;
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <div class="logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+            </svg>
+        </div>
+
         <h1>Ephemera</h1>
         <p class="tagline">Preview Environments for Every Pull Request</p>
 
-        <div class="feature-list">
-            <div class="feature">Automatic environment provisioning</div>
-            <div class="feature">Kubernetes-powered deployments</div>
-            <div class="feature">SSL certificates via Let's Encrypt</div>
-            <div class="feature">Cleanup on PR close</div>
-        </div>
+        <div class="card">
+            <div class="feature-list">
+                <div class="feature">
+                    <svg class="feature-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    Automatic environment provisioning
+                </div>
+                <div class="feature">
+                    <svg class="feature-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    Kubernetes-powered deployments
+                </div>
+                <div class="feature">
+                    <svg class="feature-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    SSL certificates via Let's Encrypt
+                </div>
+                <div class="feature">
+                    <svg class="feature-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    Cleanup on PR close
+                </div>
+            </div>
 
-        <a href="/auth/github/login" class="github-login-btn">
-            <svg class="github-icon" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-            </svg>
-            Login with GitHub
-        </a>
+            <a href="/auth/github/login" class="github-login-btn">
+                <svg class="github-icon" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                </svg>
+                Continue with GitHub
+            </a>
+        </div>
 
         <p class="footer">Secure authentication via GitHub OAuth</p>
     </div>
