@@ -590,6 +590,101 @@ class DeploymentService:
                     else:
                         raise
 
+            elif kind == "PersistentVolumeClaim":
+                pvc = client.V1PersistentVolumeClaim(
+                    api_version="v1",
+                    kind="PersistentVolumeClaim",
+                    metadata=client.V1ObjectMeta(
+                        name=name,
+                        namespace=namespace,
+                        labels=metadata.get("labels", {})
+                    ),
+                    spec=client.V1PersistentVolumeClaimSpec(
+                        access_modes=spec.get("accessModes", ["ReadWriteOnce"]),
+                        resources=client.V1VolumeResourceRequirements(
+                            requests=spec.get("resources", {}).get("requests", {"storage": "1Gi"})
+                        ),
+                        storage_class_name=spec.get("storageClassName"),
+                    )
+                )
+
+                try:
+                    self.k8s.core_v1.create_namespaced_persistent_volume_claim(
+                        namespace=namespace,
+                        body=pvc
+                    )
+                    logger.info(f"Created PVC {name} in namespace {namespace}")
+                except ApiException as e:
+                    if e.status == 409:
+                        self.k8s.core_v1.patch_namespaced_persistent_volume_claim(
+                            name=name,
+                            namespace=namespace,
+                            body=pvc
+                        )
+                        logger.info(f"Updated PVC {name} in namespace {namespace}")
+                    else:
+                        raise
+
+            elif kind == "ConfigMap":
+                config_map = client.V1ConfigMap(
+                    api_version="v1",
+                    kind="ConfigMap",
+                    metadata=client.V1ObjectMeta(
+                        name=name,
+                        namespace=namespace,
+                        labels=metadata.get("labels", {})
+                    ),
+                    data=manifest.get("data", {}),
+                )
+
+                try:
+                    self.k8s.core_v1.create_namespaced_config_map(
+                        namespace=namespace,
+                        body=config_map
+                    )
+                    logger.info(f"Created ConfigMap {name} in namespace {namespace}")
+                except ApiException as e:
+                    if e.status == 409:
+                        self.k8s.core_v1.patch_namespaced_config_map(
+                            name=name,
+                            namespace=namespace,
+                            body=config_map
+                        )
+                        logger.info(f"Updated ConfigMap {name} in namespace {namespace}")
+                    else:
+                        raise
+
+            elif kind == "Secret":
+                secret = client.V1Secret(
+                    api_version="v1",
+                    kind="Secret",
+                    metadata=client.V1ObjectMeta(
+                        name=name,
+                        namespace=namespace,
+                        labels=metadata.get("labels", {})
+                    ),
+                    type=manifest.get("type", "Opaque"),
+                    string_data=manifest.get("stringData", {}),
+                    data=manifest.get("data"),
+                )
+
+                try:
+                    self.k8s.core_v1.create_namespaced_secret(
+                        namespace=namespace,
+                        body=secret
+                    )
+                    logger.info(f"Created Secret {name} in namespace {namespace}")
+                except ApiException as e:
+                    if e.status == 409:
+                        self.k8s.core_v1.patch_namespaced_secret(
+                            name=name,
+                            namespace=namespace,
+                            body=secret
+                        )
+                        logger.info(f"Updated Secret {name} in namespace {namespace}")
+                    else:
+                        raise
+
             else:
                 logger.warning(f"Unsupported manifest kind: {kind}")
                 return False
