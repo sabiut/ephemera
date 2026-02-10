@@ -55,7 +55,9 @@ def update_deployment_status(
     deployment: Deployment,
     status: DeploymentStatus,
     error_message: Optional[str] = None,
-    logs: Optional[str] = None
+    logs: Optional[str] = None,
+    ai_generated: Optional[bool] = None,
+    ai_plan: Optional[str] = None,
 ) -> Deployment:
     """Update deployment status"""
     deployment.status = status
@@ -71,6 +73,12 @@ def update_deployment_status(
 
     if logs:
         deployment.logs = logs
+
+    if ai_generated is not None:
+        deployment.ai_generated = ai_generated
+
+    if ai_plan is not None:
+        deployment.ai_plan = ai_plan
 
     db.commit()
     db.refresh(deployment)
