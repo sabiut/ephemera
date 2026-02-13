@@ -10,8 +10,18 @@ on:
       - 'docker-compose.yml'
       - '.github/workflows/deploy.yml'
       - 'infrastructure/k8s/ephemera/**'
+      - 'infrastructure/terraform/gcp/**'
 
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - destroy
 
 env:
   GCP_PROJECT_ID: ephemera-dev-2025
@@ -20,8 +30,12 @@ env:
   ARTIFACT_REGISTRY: us-central1-docker.pkg.dev/ephemera-dev-2025/ephemera
 
 jobs:
-  build-and-deploy:
-    name: Build and Deploy to GKE
+  # ──────────────────────────────────────────────
+  # DESTROY JOB — tears down all GCP infrastructure
+  # ──────────────────────────────────────────────
+  destroy:
+    name: Destroy Infrastructure
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
     runs-on: ubuntu-latest
 
     steps:
@@ -43,10 +57,70 @@ jobs:
       with:
         terraform_wrapper: false
 
-    - name: Configure Docker for Artifact Registry
+    - name: Terraform Init
       run: |
-        gcloud auth configure-docker us-central1-docker.pkg.dev
+        cd infrastructure/terraform/gcp
+        terraform init -input=false
 
+    - name: Terraform Destroy
+      run: |
+        cd infrastructure/terraform/gcp
+        terraform destroy -auto-approve \
+          -var="gcp_project_id=${{ env.GCP_PROJECT_ID }}" \
+          -var="gcp_region=${{ env.GKE_REGION }}" \
+          -var="environment=dev" \
+          -var="owner=sabiut" \
+          -var="cluster_version=1.34"
+
+    - name: Confirm destruction
+      run: |
+        echo "All GCP infrastructure has been destroyed."
+        echo "To redeploy, trigger this workflow with action=deploy"
+
+  # ──────────────────────────────────────────────
+  # DEPLOY JOB — provisions infra + deploys app
+  # ──────────────────────────────────────────────
+  deploy:
+    name: Deploy Infrastructure & Application
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'deploy')
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        install_components: 'gke-gcloud-auth-plugin'
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_wrapper: false
+
+    # ─── Terraform: Provision Infrastructure ─────
+    - name: Terraform Init
+      run: |
+        cd infrastructure/terraform/gcp
+        terraform init -input=false
+
+    - name: Terraform Apply
+      run: |
+        cd infrastructure/terraform/gcp
+        terraform apply -auto-approve \
+          -var="gcp_project_id=${{ env.GCP_PROJECT_ID }}" \
+          -var="gcp_region=${{ env.GKE_REGION }}" \
+          -var="environment=dev" \
+          -var="owner=sabiut" \
+          -var="cluster_version=1.34"
+
+    # ─── Connect to GKE ─────────────────────────
     - name: Get GKE credentials
       run: |
         gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
@@ -54,6 +128,11 @@ jobs:
           --project ${{ env.GCP_PROJECT_ID }}
       env:
         USE_GKE_GCLOUD_AUTH_PLUGIN: "True"
+
+    # ─── Build & Push Docker Images ──────────────
+    - name: Configure Docker for Artifact Registry
+      run: |
+        gcloud auth configure-docker us-central1-docker.pkg.dev
 
     - name: Build and push API image
       run: |
@@ -73,12 +152,10 @@ jobs:
         docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:${{ github.sha }}
         docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:latest
 
+    # ─── Get Terraform Outputs ───────────────────
     - name: Get infrastructure connection strings from Terraform
       run: |
         cd infrastructure/terraform/gcp
-
-        # Initialize Terraform to read state (suppress warnings)
-        terraform init -input=false > /dev/null 2>&1
 
         # Get Redis connection info
         REDIS_HOST=$(terraform output -raw redis_host 2>/dev/null || echo "")
@@ -86,7 +163,6 @@ jobs:
         REDIS_AUTH=$(terraform output -raw redis_auth_string 2>/dev/null || echo "")
 
         # Construct Redis URL with authentication and TLS
-        # Memorystore uses rediss:// for TLS encryption
         REDIS_URL="rediss://:${REDIS_AUTH}@${REDIS_HOST}:${REDIS_PORT}/0"
 
         # Get PostgreSQL connection info
@@ -100,7 +176,7 @@ jobs:
 
         DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
 
-        # Export to GitHub environment using multiline format to handle special characters
+        # Export to GitHub environment
         {
           echo "REDIS_URL<<EOF"
           echo "${REDIS_URL}"
@@ -116,9 +192,9 @@ jobs:
         STATIC_IP=$(terraform output -raw ingress_ip 2>/dev/null || echo "")
         echo "STATIC_IP=${STATIC_IP}" >> $GITHUB_ENV
 
+    # ─── Install Cluster Components ──────────────
     - name: Install nginx-ingress controller
       run: |
-        # Check if nginx-ingress is already installed
         if ! kubectl get namespace ingress-nginx &> /dev/null; then
           echo "Installing nginx-ingress controller with static IP: ${{ env.STATIC_IP }}"
           kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.4/deploy/static/provider/cloud/deploy.yaml
@@ -136,18 +212,15 @@ jobs:
           sleep 30
         else
           echo "nginx-ingress already installed"
-          # Ensure static IP is configured even if already installed
           kubectl patch service ingress-nginx-controller -n ingress-nginx \
             -p '{"spec":{"loadBalancerIP":"${{ env.STATIC_IP }}"}}'
         fi
 
     - name: Install cert-manager
       run: |
-        # Check if cert-manager is already installed
         if ! kubectl get namespace cert-manager &> /dev/null; then
           echo "Installing cert-manager..."
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.3/cert-manager.yaml
-          # Wait for cert-manager to be ready
           kubectl wait --for=condition=Available --timeout=300s deployment/cert-manager -n cert-manager
           kubectl wait --for=condition=Available --timeout=300s deployment/cert-manager-webhook -n cert-manager
           kubectl wait --for=condition=Available --timeout=300s deployment/cert-manager-cainjector -n cert-manager
@@ -155,6 +228,7 @@ jobs:
           echo "cert-manager already installed"
         fi
 
+    # ─── Deploy Application ─────────────────────
     - name: Apply Kubernetes manifests
       run: |
         kubectl apply -f infrastructure/k8s/ephemera/namespace.yaml
@@ -178,7 +252,7 @@ jobs:
           --from-literal=AI_PROVIDER="anthropic" \
           --dry-run=client -o yaml | kubectl apply -f -
 
-        # Apply Let's Encrypt ClusterIssuer (generate from template with email)
+        # Apply Let's Encrypt ClusterIssuer
         export LETSENCRYPT_EMAIL="${{ secrets.LETSENCRYPT_EMAIL }}"
         envsubst < infrastructure/k8s/letsencrypt-issuer.yaml.template | kubectl apply -f -
 
@@ -188,9 +262,10 @@ jobs:
         kubectl apply -f infrastructure/k8s/ephemera/api-service.yaml
         kubectl apply -f infrastructure/k8s/ephemera/api-ingress.yaml
 
-    - name: Run database migrations (before updating images)
+    - name: Run database migrations
       run: |
-        # Run migrations on the current running pods before deploying new version
+        # Wait for pods to be ready before running migrations
+        kubectl wait --for=condition=ready pod -l component=api -n ephemera-system --timeout=120s || true
         kubectl exec -n ephemera-system deployment/ephemera-api -- alembic upgrade head || echo "Migration failed or no pods running yet"
 
     - name: Update deployment images
@@ -216,5 +291,8 @@ jobs:
       run: |
         kubectl get pods -n ephemera-system
         kubectl get ingress -n ephemera-system
-        echo "Deployment complete! API should be accessible at https://ephemera-api.devpreview.app"
-# Trigger deployment
+        INGRESS_IP=$(kubectl get ingress ephemera-api -n ephemera-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        echo "Deployment complete!"
+        echo "API accessible at: https://ephemera-api.devpreview.app"
+        echo "Ingress IP: ${INGRESS_IP}"
+        echo "Make sure Cloudflare DNS points to: ${INGRESS_IP}"
