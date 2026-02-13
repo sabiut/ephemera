@@ -29,6 +29,23 @@ class Settings(BaseSettings):
     environment: str = "development"
     base_domain: str
 
+    # AI Deployment
+    ai_deployment_enabled: bool = True
+    ai_provider: str = "anthropic"  # "anthropic", "openai", or "gemini"
+    ai_cache_ttl: int = 3600  # seconds
+
+    # Anthropic
+    anthropic_api_key: Optional[str] = None
+    anthropic_model: str = "claude-sonnet-4-20250514"
+
+    # OpenAI
+    openai_api_key: Optional[str] = None
+    openai_model: str = "gpt-4o"
+
+    # Google Gemini
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.0-flash"
+
     # AWS
     aws_region: str = "us-west-2"
     aws_account_id: str

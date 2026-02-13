@@ -17,7 +17,9 @@ from app.database import SessionLocal
 from app.services.kubernetes import kubernetes_service
 from app.services.github import github_service
 from app.services.deployment import deployment_service
+from app.services import ai_deployment_service
 from app.crud import environment as environment_crud
+from app.crud import deployment as deployment_crud
 from app.models.environment import EnvironmentStatus
 
 logger = logging.getLogger(__name__)
@@ -102,15 +104,28 @@ def provision_environment(
         # Deploy application from docker-compose.yml if GitHub credentials provided
         deployed_services = []
         service_urls = {}
+        deployment_result = {}
         if installation_id and repo_full_name and commit_sha:
             logger.info(f"Deploying application to namespace {environment.namespace}")
 
-            deployment_result = deployment_service.deploy_application(
+            # Use AI deployment service if available, falls back to deterministic internally
+            active_service = (
+                ai_deployment_service
+                if ai_deployment_service and ai_deployment_service.enabled
+                else deployment_service
+            )
+
+            deployment_result = active_service.deploy_application(
                 installation_id=installation_id,
                 repo_full_name=repo_full_name,
                 namespace=environment.namespace,
                 ref=commit_sha
             )
+
+            if deployment_result.get("ai_generated"):
+                logger.info("Deployment used AI-generated manifests")
+            elif deployment_result.get("ai_fallback_reason"):
+                logger.info(f"AI fallback: {deployment_result['ai_fallback_reason']}")
 
             if deployment_result.get("success"):
                 deployed_services = deployment_result.get("services", [])
@@ -121,6 +136,20 @@ def provision_environment(
             else:
                 # Log warning but don't fail - namespace still created
                 logger.warning(f"Failed to deploy application: {deployment_result.get('error')}")
+
+        # Update deployment record with AI metadata
+        if deployment_result:
+            latest_deployment = deployment_crud.get_latest_deployment(self.db, environment_id)
+            if latest_deployment:
+                from app.models.deployment import DeploymentStatus
+                deployment_crud.update_deployment_status(
+                    db=self.db,
+                    deployment=latest_deployment,
+                    status=DeploymentStatus.SUCCESS if deployment_result.get("success") else DeploymentStatus.FAILED,
+                    error_message=deployment_result.get("error"),
+                    ai_generated=deployment_result.get("ai_generated", False),
+                    ai_plan=deployment_result.get("ai_plan"),
+                )
 
         # Update environment status to ready
         environment_crud.update_environment_status(
@@ -165,12 +194,21 @@ def provision_environment(
                 elif installation_id and repo_full_name:
                     deployment_info = "\n⚠️ **Note**: No docker-compose.yml found. Namespace created but no application deployed.\n"
 
+                # Build AI deployment plan section
+                ai_section = ""
+                if deployment_result.get("ai_generated"):
+                    ai_plan = deployment_result.get("ai_plan", "")
+                    if ai_plan:
+                        ai_section = f"\n<details>\n<summary>AI Deployment Plan</summary>\n\n{ai_plan}\n</details>\n"
+                elif deployment_result.get("ai_fallback_reason"):
+                    ai_section = f"\n> **Note**: AI deployment unavailable ({deployment_result['ai_fallback_reason']}). Used deterministic converter.\n"
+
                 comment = f"""## Ephemera Environment Ready
 
 Your preview environment has been created!
 
 **Namespace**: `{environment.namespace}`
-**Status**: Ready{deployment_info}
+**Status**: Ready{deployment_info}{ai_section}
 ---
 *Powered by Ephemera*
 """
