@@ -62,6 +62,11 @@ jobs:
         cd infrastructure/terraform/gcp
         terraform init -input=false
 
+    - name: Migrate Terraform state (remove secrets module)
+      run: |
+        cd infrastructure/terraform/gcp
+        terraform state rm module.kubernetes_secrets 2>/dev/null || true
+
     - name: Terraform Destroy
       run: |
         cd infrastructure/terraform/gcp
@@ -109,6 +114,13 @@ jobs:
       run: |
         cd infrastructure/terraform/gcp
         terraform init -input=false
+
+    - name: Migrate Terraform state (remove secrets module)
+      run: |
+        cd infrastructure/terraform/gcp
+        # One-time migration: remove kubernetes_secrets module from state
+        # so Terraform doesn't try to destroy the K8s secret (now managed by kubectl)
+        terraform state rm module.kubernetes_secrets 2>/dev/null || true
 
     - name: Terraform Apply
       run: |
