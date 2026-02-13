@@ -10,17 +10,18 @@ on:
       - 'docker-compose.yml'
       - '.github/workflows/deploy.yml'
       - 'infrastructure/k8s/ephemera/**'
-      - 'infrastructure/terraform/gcp/**'
 
   workflow_dispatch:
     inputs:
       action:
         description: 'Action to perform'
         required: true
-        default: 'deploy'
+        default: 'all'
         type: choice
         options:
-          - deploy
+          - all
+          - infra
+          - app
           - destroy
 
 env:
@@ -31,7 +32,7 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────
-  # DESTROY JOB — tears down all GCP infrastructure
+  # DESTROY — tears down all GCP infrastructure
   # ──────────────────────────────────────────────
   destroy:
     name: Destroy Infrastructure
@@ -62,7 +63,7 @@ jobs:
         cd infrastructure/terraform/gcp
         terraform init -input=false
 
-    - name: Migrate Terraform state (remove secrets module)
+    - name: Clean up removed modules from state
       run: |
         cd infrastructure/terraform/gcp
         terraform state rm module.kubernetes_secrets 2>/dev/null || true
@@ -80,15 +81,20 @@ jobs:
     - name: Confirm destruction
       run: |
         echo "All GCP infrastructure has been destroyed."
-        echo "To redeploy, trigger this workflow with action=deploy"
+        echo "To redeploy, trigger this workflow with action=all"
 
   # ──────────────────────────────────────────────
-  # DEPLOY JOB — provisions infra + deploys app
+  # INFRA — provision GCP infrastructure only
   # ──────────────────────────────────────────────
-  deploy:
-    name: Deploy Infrastructure & Application
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'deploy')
+  infra:
+    name: Provision Infrastructure
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.action == 'infra' || github.event.inputs.action == 'all')
     runs-on: ubuntu-latest
+
+    outputs:
+      static_ip: ${{ steps.get_ip.outputs.static_ip }}
 
     steps:
     - name: Checkout code
@@ -109,17 +115,16 @@ jobs:
       with:
         terraform_wrapper: false
 
-    # ─── Terraform: Provision Infrastructure ─────
     - name: Terraform Init
       run: |
         cd infrastructure/terraform/gcp
         terraform init -input=false
 
-    - name: Migrate Terraform state (remove secrets module)
+    - name: Clean up removed modules from state
       run: |
         cd infrastructure/terraform/gcp
-        # One-time migration: remove kubernetes_secrets module from state
-        # so Terraform doesn't try to destroy the K8s secret (now managed by kubectl)
+        # Remove kubernetes_secrets module if it exists in state
+        # (module was removed — secrets now managed by kubectl in app job)
         terraform state rm module.kubernetes_secrets 2>/dev/null || true
 
     - name: Terraform Apply
@@ -131,6 +136,53 @@ jobs:
           -var="environment=dev" \
           -var="owner=sabiut" \
           -var="cluster_version=1.34"
+
+    - name: Get static IP
+      id: get_ip
+      run: |
+        cd infrastructure/terraform/gcp
+        STATIC_IP=$(terraform output -raw ingress_ip 2>/dev/null || echo "")
+        echo "static_ip=${STATIC_IP}" >> $GITHUB_OUTPUT
+        echo "=========================================="
+        echo "Infrastructure provisioned successfully!"
+        echo "Static IP: ${STATIC_IP}"
+        echo "=========================================="
+        echo "Update Cloudflare DNS: ephemera-api.devpreview.app -> ${STATIC_IP}"
+        echo "Then run the pipeline again with action=app to deploy the application."
+
+  # ──────────────────────────────────────────────
+  # APP — build & deploy application to GKE
+  # ──────────────────────────────────────────────
+  app:
+    name: Deploy Application
+    needs: [infra]
+    # Run if infra succeeded or was skipped (action=app or push)
+    if: >-
+      always() &&
+      (needs.infra.result == 'success' || needs.infra.result == 'skipped') &&
+      (github.event_name == 'push' ||
+       github.event.inputs.action == 'app' ||
+       github.event.inputs.action == 'all')
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        install_components: 'gke-gcloud-auth-plugin'
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_wrapper: false
 
     # ─── Connect to GKE ─────────────────────────
     - name: Get GKE credentials
@@ -168,6 +220,7 @@ jobs:
     - name: Get infrastructure connection strings from Terraform
       run: |
         cd infrastructure/terraform/gcp
+        terraform init -input=false > /dev/null 2>&1
 
         # Get Redis connection info
         REDIS_HOST=$(terraform output -raw redis_host 2>/dev/null || echo "")
@@ -304,7 +357,9 @@ jobs:
         kubectl get pods -n ephemera-system
         kubectl get ingress -n ephemera-system
         INGRESS_IP=$(kubectl get ingress ephemera-api -n ephemera-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        echo "=========================================="
         echo "Deployment complete!"
-        echo "API accessible at: https://ephemera-api.devpreview.app"
+        echo "API: https://ephemera-api.devpreview.app"
         echo "Ingress IP: ${INGRESS_IP}"
+        echo "=========================================="
         echo "Make sure Cloudflare DNS points to: ${INGRESS_IP}"
