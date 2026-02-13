@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -32,6 +32,10 @@ class Deployment(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)
     logs = Column(Text, nullable=True)  # Deployment logs
+
+    # AI deployment metadata
+    ai_generated = Column(Boolean, default=False, nullable=False)
+    ai_plan = Column(Text, nullable=True)  # AI-generated deployment plan summary
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
