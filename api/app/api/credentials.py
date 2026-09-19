@@ -15,7 +15,7 @@ from app.schemas.credential import (
     CloudCredentialResponse,
 )
 from app.core.encryption import encrypt_credentials, decrypt_credentials
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, require_api_token
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
@@ -71,7 +71,7 @@ def list_credentials(
     return credentials
 
 
-@router.get("/gcp")
+@router.get("/gcp", dependencies=[Depends(require_api_token)])
 def get_gcp_credentials(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -79,8 +79,9 @@ def get_gcp_credentials(
     """
     Get decrypted GCP credentials for the authenticated user.
 
-    This endpoint is used by GitHub Actions workflows to retrieve
-    credentials using an API token.
+    Used by GitHub Actions workflows. Requires a user-created API token;
+    dashboard login sessions are refused so a hijacked browser session
+    cannot export cloud secrets.
 
     Returns the first active GCP credential for the user.
     """

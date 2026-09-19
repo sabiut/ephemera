@@ -28,6 +28,9 @@ class APIToken(Base):
     # Token
     token_hash = Column(String, unique=True, index=True, nullable=False)
     token_prefix = Column(String, index=True, nullable=False)  # First 8 chars for display
+    # "api": user-created, may fetch decrypted cloud credentials (CI use).
+    # "session": issued by the dashboard login, limited to dashboard operations.
+    token_type = Column(String, nullable=False, default="api", server_default="api")
 
     # Optional name/description
     name = Column(String, nullable=True)  # e.g., "GitHub Actions - my-app"
@@ -39,6 +42,9 @@ class APIToken(Base):
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)  # Optional expiration
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    TYPE_API = "api"
+    TYPE_SESSION = "session"
 
     def __repr__(self):
         return f"<APIToken {self.token_prefix}... for user {self.user_id}>"

@@ -106,6 +106,7 @@ class GitHubOAuthService:
             user_id=user.id,
             token_hash=APIToken.hash_token(token),
             token_prefix=token[:8],
+            token_type=APIToken.TYPE_SESSION,
             name="Web Dashboard Session",
             description="Auto-generated session token for web UI",
             is_active=True,

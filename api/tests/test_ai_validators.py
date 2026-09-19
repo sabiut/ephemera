@@ -73,3 +73,51 @@ def test_disallowed_kinds_and_service_types():
 
     lb = {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "s"}, "spec": {"type": "LoadBalancer", "ports": [{}]}}
     assert not v.validate_all([lb], "pr-1-app").is_valid
+
+
+def test_init_containers_capabilities_and_host_ports_are_checked():
+    v = ManifestValidator(base_domain="preview.test")
+
+    privileged_init = _deployment(initContainers=[{"name": "i", "image": "busybox", "securityContext": {"privileged": True}}])
+    assert not v.validate_all([privileged_init], "pr-1-app").is_valid
+
+    caps = _deployment()
+    caps["spec"]["template"]["spec"]["containers"][0]["securityContext"] = {"capabilities": {"add": ["SYS_ADMIN"]}}
+    assert not v.validate_all([caps], "pr-1-app").is_valid
+
+    host_port = _deployment()
+    host_port["spec"]["template"]["spec"]["containers"][0]["ports"] = [{"containerPort": 80, "hostPort": 80}]
+    assert not v.validate_all([host_port], "pr-1-app").is_valid
+
+    sa = _deployment(serviceAccountName="cluster-admin-sa")
+    assert not v.validate_all([sa], "pr-1-app").is_valid
+
+
+def test_pods_get_hardened_defaults():
+    v = ManifestValidator(base_domain="preview.test")
+    result = v.validate_all([_deployment()], "pr-1-app")
+    assert result.is_valid
+    pod = result.corrected_manifests[0]["spec"]["template"]["spec"]
+    assert pod["automountServiceAccountToken"] is False
+    assert pod["containers"][0]["securityContext"] == {"allowPrivilegeEscalation": False}
+
+
+def test_ingress_snippet_annotations_are_stripped_and_class_pinned():
+    v = ManifestValidator(base_domain="preview.test")
+    ing = _ingress("pr-1-app-web.preview.test")
+    ing["metadata"]["annotations"] = {
+        "cert-manager.io/cluster-issuer": "letsencrypt-prod",
+        "nginx.ingress.kubernetes.io/server-snippet": "return 302 https://evil.example;",
+        "nginx.ingress.kubernetes.io/auth-url": "https://evil.example/steal",
+    }
+    ing["spec"]["ingressClassName"] = "nginx"
+    result = v.validate_all([ing], "pr-1-app")
+    assert result.is_valid, result.errors
+    assert result.corrected_manifests[0]["metadata"]["annotations"] == {
+        "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+    }
+    assert any("Removed disallowed annotations" in w for w in result.warnings)
+
+    other_class = _ingress("pr-1-app-web.preview.test")
+    other_class["spec"]["ingressClassName"] = "internal-alb"
+    assert not v.validate_all([other_class], "pr-1-app").is_valid

@@ -73,10 +73,43 @@ class KubernetesService:
             logger.error(f"Unexpected error creating namespace {namespace}: {e}")
             return False
 
+    MANAGED_PREFIX = "pr-"
+    MANAGED_LABELS = ({"managed-by": "ephemera"}, {"app": "ephemera"})
+
+    def is_managed_namespace(self, namespace: str) -> Optional[bool]:
+        """
+        True if the namespace looks like one Ephemera created: named pr-* and
+        carrying our label. None if it does not exist or the API failed.
+        Guards the cluster-wide delete permission against a bad record or a
+        bug ever pointing at kube-system or ephemera-system.
+        """
+        if not namespace.startswith(self.MANAGED_PREFIX):
+            return False
+        try:
+            ns = self.core_v1.read_namespace(name=namespace)
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            logger.error(f"Error reading namespace {namespace}: {e}")
+            return None
+        labels = (ns.metadata.labels or {})
+        return any(all(labels.get(k) == v for k, v in wanted.items()) for wanted in self.MANAGED_LABELS)
+
     def delete_namespace(self, namespace: str) -> bool:
-        """Delete a namespace. Returns True if it is gone or being deleted."""
+        """
+        Delete a namespace Ephemera manages. Returns True if it is gone or
+        being deleted. Refuses (returns False) for unmanaged namespaces.
+        """
         if not self.enabled:
             logger.warning(f"Kubernetes is disabled, skipping namespace deletion: {namespace}")
+            return False
+
+        managed = self.is_managed_namespace(namespace)
+        if managed is None:
+            logger.warning(f"Namespace {namespace} not found")
+            return True
+        if not managed:
+            logger.error(f"Refusing to delete namespace {namespace}: not managed by Ephemera")
             return False
 
         try:
