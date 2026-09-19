@@ -45,7 +45,7 @@ class Deployment(Base):
         return f"<Deployment {self.id} - {self.commit_sha[:8]} ({self.status})>"
 
     @property
-    def duration_seconds(self) -> int | None:
+    def duration_seconds(self) -> float | None:
         """Calculate deployment duration in seconds"""
         if self.started_at and self.completed_at:
             return (self.completed_at - self.started_at).total_seconds()

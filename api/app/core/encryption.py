@@ -3,76 +3,54 @@ Encryption utilities for secure credential storage.
 Uses Fernet (symmetric encryption) from cryptography library.
 """
 
-import os
+from typing import Optional
+
 from cryptography.fernet import Fernet
+
+from app.config import get_settings
 
 
 class CredentialEncryption:
     """Handle encryption/decryption of cloud credentials"""
 
-    def __init__(self, encryption_key: str = None):
+    def __init__(self, encryption_key: Optional[str] = None):
         """
         Initialize encryption handler.
 
         Args:
-            encryption_key: Base64-encoded encryption key. If not provided,
-                          will use ENCRYPTION_KEY from environment.
+            encryption_key: Base64-encoded Fernet key. Defaults to the
+                ENCRYPTION_KEY setting.
         """
         if encryption_key is None:
-            encryption_key = os.getenv("ENCRYPTION_KEY")
+            encryption_key = get_settings().encryption_key
             if not encryption_key:
                 raise ValueError(
-                    "ENCRYPTION_KEY environment variable must be set. "
+                    "ENCRYPTION_KEY must be set. "
                     "Generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
                 )
 
         self.fernet = Fernet(encryption_key.encode() if isinstance(encryption_key, str) else encryption_key)
 
     def encrypt(self, plaintext: str) -> str:
-        """
-        Encrypt plaintext string.
-
-        Args:
-            plaintext: String to encrypt (e.g., JSON credentials)
-
-        Returns:
-            Base64-encoded encrypted string
-        """
+        """Encrypt a string and return the base64 token."""
         if not plaintext:
             raise ValueError("Cannot encrypt empty string")
-
-        encrypted_bytes = self.fernet.encrypt(plaintext.encode())
-        return encrypted_bytes.decode()
+        return self.fernet.encrypt(plaintext.encode()).decode()
 
     def decrypt(self, ciphertext: str) -> str:
-        """
-        Decrypt ciphertext string.
-
-        Args:
-            ciphertext: Base64-encoded encrypted string
-
-        Returns:
-            Decrypted plaintext string
-        """
+        """Decrypt a base64 token back to the original string."""
         if not ciphertext:
             raise ValueError("Cannot decrypt empty string")
-
-        decrypted_bytes = self.fernet.decrypt(ciphertext.encode())
-        return decrypted_bytes.decode()
+        return self.fernet.decrypt(ciphertext.encode()).decode()
 
     @staticmethod
     def generate_key() -> str:
-        """
-        Generate a new encryption key.
-
-        Returns:
-            Base64-encoded encryption key
-        """
+        """Generate a new base64-encoded Fernet key."""
         return Fernet.generate_key().decode()
 
 
 # Global instance
-_encryption = None
+_encryption: Optional[CredentialEncryption] = None
 
 
 def get_encryption() -> CredentialEncryption:
@@ -84,26 +62,10 @@ def get_encryption() -> CredentialEncryption:
 
 
 def encrypt_credentials(credentials_json: str) -> str:
-    """
-    Encrypt cloud credentials JSON.
-
-    Args:
-        credentials_json: JSON string of credentials
-
-    Returns:
-        Encrypted string safe for database storage
-    """
+    """Encrypt cloud credentials JSON for database storage."""
     return get_encryption().encrypt(credentials_json)
 
 
 def decrypt_credentials(encrypted_data: str) -> str:
-    """
-    Decrypt cloud credentials.
-
-    Args:
-        encrypted_data: Encrypted credentials from database
-
-    Returns:
-        Decrypted JSON string
-    """
+    """Decrypt cloud credentials from the database."""
     return get_encryption().decrypt(encrypted_data)

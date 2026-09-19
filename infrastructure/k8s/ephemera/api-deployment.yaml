@@ -121,8 +121,6 @@ spec:
             secretKeyRef:
               name: ephemera-secrets
               key: ENCRYPTION_KEY
-        - name: GITHUB_APP_PRIVATE_KEY_PATH
-          value: "/tmp/github-app-key.pem"
         # AI Deployment config
         - name: AI_PROVIDER
           valueFrom:
@@ -172,8 +170,13 @@ metadata:
   name: ephemera-api
 rules:
 - apiGroups: [""]
-  resources: ["namespaces", "services", "pods", "configmaps", "secrets", "persistentvolumeclaims"]
+  resources: ["namespaces", "services", "pods", "configmaps", "persistentvolumeclaims"]
   verbs: ["get", "list", "create", "update", "patch", "delete"]
+# Secrets: the API creates/updates placeholder secrets inside preview
+# namespaces but must never be able to read secrets cluster-wide.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create", "patch", "delete"]
 - apiGroups: ["apps"]
   resources: ["deployments", "replicasets"]
   verbs: ["get", "list", "create", "update", "patch", "delete"]

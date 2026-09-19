@@ -7,6 +7,7 @@ Supports multiple LLM providers (Anthropic, OpenAI, Gemini).
 Falls back to the deterministic DeploymentService on failure.
 """
 
+import copy
 import json
 import hashlib
 import time
@@ -22,6 +23,7 @@ from app.services.ai_prompts import (
 )
 from app.services.ai_providers import LLMProvider, LLMProviderError, create_provider
 from app.services.ai_validators import ManifestValidator
+from app.services.deployment import COMPOSE_FILENAMES
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,7 @@ class AIDeploymentService:
         self.cache_ttl = cache_ttl
         self.provider = provider
         self.enabled = enabled and provider is not None
-        self.validator = ManifestValidator()
+        self.validator = ManifestValidator(base_domain=base_domain)
 
         # In-memory cache: key -> (timestamp, manifests)
         self._cache: Dict[str, Tuple[float, List[Dict]]] = {}
@@ -108,7 +110,8 @@ class AIDeploymentService:
             if not repo_context.compose_content:
                 return {
                     "success": False,
-                    "error": "No docker-compose.yml found in repository",
+                    "compose_found": False,
+                    "error": "docker-compose.yml not found in repository",
                     "services": [],
                     "service_urls": {},
                     "ai_generated": False,
@@ -180,37 +183,25 @@ class AIDeploymentService:
                     manifests, repo_context, warnings=validation.warnings
                 )
 
-            # Step 7: Apply manifests
-            applied_count = 0
-            failed = []
-            service_urls = {}
-            services = []
-
-            for manifest in manifests:
-                kind = manifest.get("kind", "")
-                mname = manifest.get("metadata", {}).get("name", "unknown")
-
-                success = self.deployment_service.apply_manifest(manifest)
-                if success:
-                    applied_count += 1
-
-                    # Track services and extract Ingress URLs
-                    if kind == "Deployment":
-                        services.append(mname)
-                    elif kind == "Ingress":
-                        rules = manifest.get("spec", {}).get("rules", [])
-                        for rule in rules:
-                            host = rule.get("host")
-                            if host:
-                                service_urls[mname] = f"https://{host}"
-                else:
-                    failed.append(f"{kind}/{mname}")
+            # Step 7: Apply manifests (deep-copied: cached manifests must not
+            # pick up this run's revision annotation)
+            to_apply = copy.deepcopy(manifests)
+            applied_count, failed, service_urls = self.deployment_service.apply_manifests(
+                to_apply, revision=ref
+            )
+            services = [
+                m.get("metadata", {}).get("name", "unknown")
+                for m in to_apply
+                if m.get("kind") == "Deployment"
+                and f"Deployment/{m.get('metadata', {}).get('name', 'unknown')}" not in failed
+            ]
 
             if failed:
                 logger.warning(f"Failed to apply manifests: {', '.join(failed)}")
 
             return {
                 "success": len(failed) == 0,
+                "compose_found": True,
                 "applied_count": applied_count,
                 "services": services,
                 "service_urls": service_urls,
@@ -282,12 +273,7 @@ class AIDeploymentService:
             return context
 
         total_additional_chars = 0
-        compose_filenames = {
-            "docker-compose.yml",
-            "docker-compose.yaml",
-            "compose.yml",
-            "compose.yaml",
-        }
+        compose_filenames = set(COMPOSE_FILENAMES)
 
         for filename, char_budget in REPO_FILES_TO_FETCH:
             # Stop fetching additional files if we hit the budget
@@ -349,8 +335,7 @@ class AIDeploymentService:
 
         # Strip markdown code fences if present
         if text.startswith("```"):
-            first_newline = text.index("\n")
-            text = text[first_newline + 1:]
+            text = text.partition("\n")[2]
         if text.endswith("```"):
             text = text[:-3]
 

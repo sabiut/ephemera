@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 from datetime import datetime
 
@@ -19,14 +19,14 @@ class APITokenResponse(APITokenBase):
     id: int
     user_id: int
     token_prefix: str  # Only show first 8 chars
+    token_type: str = "api"
     is_active: bool
     created_at: datetime
     last_used_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class APITokenWithToken(APITokenResponse):

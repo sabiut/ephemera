@@ -51,6 +51,22 @@ class ManifestValidator:
     # Security: service types that must not be exposed externally
     INTERNAL_ONLY_SERVICE_TYPES = {"NodePort", "LoadBalancer", "ExternalName"}
 
+    # Ingress annotations the model may set. Anything else is dropped: the
+    # ingress-nginx *-snippet annotations inject raw nginx config into the
+    # shared controller, and auth-url/proxy-* can redirect or leak traffic.
+    ALLOWED_INGRESS_ANNOTATIONS = {
+        "cert-manager.io/cluster-issuer",
+        "nginx.ingress.kubernetes.io/ssl-redirect",
+        "nginx.ingress.kubernetes.io/force-ssl-redirect",
+        "nginx.ingress.kubernetes.io/proxy-body-size",
+        "nginx.ingress.kubernetes.io/proxy-read-timeout",
+        "nginx.ingress.kubernetes.io/proxy-send-timeout",
+        "nginx.ingress.kubernetes.io/backend-protocol",
+        "nginx.ingress.kubernetes.io/rewrite-target",
+        "nginx.ingress.kubernetes.io/use-regex",
+    }
+    ALLOWED_INGRESS_CLASSES = {None, "nginx"}
+
     MAX_MANIFESTS = 50
     MAX_REPLICAS = 2
     MAX_CPU_LIMIT_MILLICORES = 2000  # 2 cores
@@ -58,6 +74,12 @@ class ManifestValidator:
 
     # Valid DNS label pattern for K8s resource names
     DNS_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$")
+
+    def __init__(self, base_domain: Optional[str] = None):
+        # When set, every Ingress host must be {namespace}-<something>.{base_domain}.
+        # This stops a PR's compose file (or a prompt-injected README) from
+        # steering the shared ingress controller to hijack another hostname.
+        self.base_domain = base_domain
 
     def validate_all(
         self, manifests: Any, expected_namespace: str
@@ -69,6 +91,7 @@ class ManifestValidator:
         Namespace mismatches are corrected (not rejected).
         """
         result = ValidationResult()
+        self._expected_namespace = expected_namespace
 
         # Must be a list
         if not isinstance(manifests, list):
@@ -177,6 +200,7 @@ class ManifestValidator:
             self._validate_service(prefix, name, spec, result)
         elif kind == "Ingress":
             self._validate_ingress(prefix, name, spec, result)
+            self._filter_ingress_annotations(manifest, prefix, name, result)
         elif kind == "PersistentVolumeClaim":
             self._validate_pvc(prefix, name, spec, result)
         # ConfigMap and Secret have minimal validation needs
@@ -230,7 +254,15 @@ class ManifestValidator:
             )
             return
 
-        # Validate containers
+        # Preview pods never need to talk to the Kubernetes API
+        pod_spec["automountServiceAccountToken"] = False
+        if pod_spec.get("serviceAccountName") not in (None, "default"):
+            result.add_error(
+                f"{prefix} (Deployment/{name}): custom serviceAccountName is not allowed"
+            )
+            return
+
+        # Validate containers (init containers get the same checks)
         containers = pod_spec.get("containers", [])
         if not containers:
             result.add_error(
@@ -241,6 +273,10 @@ class ManifestValidator:
         for ci, container in enumerate(containers):
             self._validate_container(
                 container, f"{prefix} (Deployment/{name}/container[{ci}])", result
+            )
+        for ci, container in enumerate(pod_spec.get("initContainers", []) or []):
+            self._validate_container(
+                container, f"{prefix} (Deployment/{name}/initContainer[{ci}])", result
             )
 
         # Security: no hostPath volumes
@@ -277,52 +313,64 @@ class ManifestValidator:
                 f"The service will not start until a pre-built image is pushed."
             )
 
-        # Security: no privileged containers
-        security_context = container.get("securityContext", {})
-        if isinstance(security_context, dict):
-            if security_context.get("privileged"):
+        # Security: no privileged containers, no added capabilities, no host ports
+        security_context = container.get("securityContext")
+        if not isinstance(security_context, dict):
+            security_context = {}
+        container["securityContext"] = security_context
+        if security_context.get("privileged"):
+            result.add_error(
+                f"{prefix}: Privileged containers are not allowed"
+            )
+            return
+        caps = security_context.get("capabilities", {})
+        if isinstance(caps, dict) and caps.get("add"):
+            result.add_error(
+                f"{prefix}: Adding Linux capabilities is not allowed ({', '.join(map(str, caps['add']))})"
+            )
+            return
+        # Never allow escalation; set it explicitly rather than trusting the default
+        security_context["allowPrivilegeEscalation"] = False
+
+        for port in container.get("ports", []) or []:
+            if isinstance(port, dict) and port.get("hostPort"):
                 result.add_error(
-                    f"{prefix}: Privileged containers are not allowed"
+                    f"{prefix}: hostPort is not allowed"
                 )
                 return
 
-        # Validate resource limits are within bounds
+        # Cap resource limits so one preview cannot starve the cluster
         resources = container.get("resources", {})
         if isinstance(resources, dict):
             limits = resources.get("limits", {})
             if isinstance(limits, dict):
-                self._check_resource_limit(
-                    limits.get("cpu"), "cpu", prefix, result
-                )
-                self._check_resource_limit(
-                    limits.get("memory"), "memory", prefix, result
-                )
+                self._cap_resource_limit(limits, "cpu", prefix, result)
+                self._cap_resource_limit(limits, "memory", prefix, result)
 
-    def _check_resource_limit(
+    def _cap_resource_limit(
         self,
-        value: Optional[str],
+        limits: Dict[str, Any],
         resource_type: str,
         prefix: str,
         result: ValidationResult,
     ):
-        """Check that a resource limit is within bounds."""
+        """Clamp a resource limit to the maximum, editing ``limits`` in place."""
+        value = limits.get(resource_type)
         if not value:
             return
 
         try:
             if resource_type == "cpu":
-                millicores = self._parse_cpu(value)
-                if millicores > self.MAX_CPU_LIMIT_MILLICORES:
+                if self._parse_cpu(value) > self.MAX_CPU_LIMIT_MILLICORES:
+                    limits["cpu"] = f"{self.MAX_CPU_LIMIT_MILLICORES}m"
                     result.add_warning(
-                        f"{prefix}: CPU limit {value} exceeds maximum "
-                        f"{self.MAX_CPU_LIMIT_MILLICORES}m, will be capped"
+                        f"{prefix}: CPU limit {value} capped to {limits['cpu']}"
                     )
             elif resource_type == "memory":
-                mi = self._parse_memory_mi(value)
-                if mi > self.MAX_MEMORY_LIMIT_MI:
+                if self._parse_memory_mi(value) > self.MAX_MEMORY_LIMIT_MI:
+                    limits["memory"] = f"{self.MAX_MEMORY_LIMIT_MI}Mi"
                     result.add_warning(
-                        f"{prefix}: Memory limit {value} exceeds maximum "
-                        f"{self.MAX_MEMORY_LIMIT_MI}Mi, will be capped"
+                        f"{prefix}: Memory limit {value} capped to {limits['memory']}"
                     )
         except ValueError:
             result.add_warning(
@@ -349,12 +397,60 @@ class ManifestValidator:
     def _validate_ingress(
         self, prefix: str, name: str, spec: Dict, result: ValidationResult
     ):
-        """Validate Ingress-specific fields."""
+        """Validate Ingress-specific fields, including hostname ownership."""
         rules = spec.get("rules", [])
         if not rules:
             result.add_warning(
                 f"{prefix} (Ingress/{name}): No rules defined"
             )
+
+        hosts = [r.get("host") for r in rules if isinstance(r, dict)]
+        for tls in spec.get("tls", []) or []:
+            if isinstance(tls, dict):
+                hosts.extend(tls.get("hosts", []) or [])
+
+        for host in hosts:
+            if not host:
+                result.add_error(
+                    f"{prefix} (Ingress/{name}): Ingress rules must specify a host"
+                )
+            elif not self.is_allowed_host(host):
+                result.add_error(
+                    f"{prefix} (Ingress/{name}): Host '{host}' is outside this "
+                    f"environment. Allowed: {self._expected_namespace}-<service>.{self.base_domain}"
+                )
+
+    def _filter_ingress_annotations(
+        self, manifest: Dict, prefix: str, name: str, result: ValidationResult
+    ):
+        """Drop annotations outside the allowlist and pin the ingress class."""
+        annotations = manifest.get("metadata", {}).get("annotations") or {}
+        if not isinstance(annotations, dict):
+            manifest["metadata"]["annotations"] = {}
+            return
+        dropped = [k for k in annotations if k not in self.ALLOWED_INGRESS_ANNOTATIONS]
+        for key in dropped:
+            del annotations[key]
+        if dropped:
+            result.add_warning(
+                f"{prefix} (Ingress/{name}): Removed disallowed annotations: {', '.join(sorted(dropped))}"
+            )
+        manifest["metadata"]["annotations"] = annotations
+
+        spec = manifest.get("spec", {})
+        if spec.get("ingressClassName") not in self.ALLOWED_INGRESS_CLASSES:
+            result.add_error(
+                f"{prefix} (Ingress/{name}): ingressClassName '{spec.get('ingressClassName')}' is not allowed"
+            )
+
+    def is_allowed_host(self, host: str) -> bool:
+        """A host is allowed when it is {namespace}-<label>.{base_domain}."""
+        if not self.base_domain:
+            return True
+        pattern = re.compile(
+            rf"^{re.escape(self._expected_namespace)}-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.{re.escape(self.base_domain)}$"
+        )
+        return bool(pattern.match(host.lower()))
 
     def _validate_pvc(
         self, prefix: str, name: str, spec: Dict, result: ValidationResult

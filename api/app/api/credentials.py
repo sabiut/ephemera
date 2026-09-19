@@ -4,8 +4,8 @@ Cloud credentials management endpoints
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
-from datetime import datetime
+from typing import List, Optional
+from datetime import datetime, timezone
 
 from app.database import get_db
 from app.models import CloudCredential, User
@@ -15,7 +15,7 @@ from app.schemas.credential import (
     CloudCredentialResponse,
 )
 from app.core.encryption import encrypt_credentials, decrypt_credentials
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, require_api_token
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
@@ -53,7 +53,7 @@ def create_credential(
 
 @router.get("/", response_model=List[CloudCredentialResponse])
 def list_credentials(
-    provider: str = None,
+    provider: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -71,7 +71,7 @@ def list_credentials(
     return credentials
 
 
-@router.get("/gcp")
+@router.get("/gcp", dependencies=[Depends(require_api_token)])
 def get_gcp_credentials(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -79,8 +79,9 @@ def get_gcp_credentials(
     """
     Get decrypted GCP credentials for the authenticated user.
 
-    This endpoint is used by GitHub Actions workflows to retrieve
-    credentials using an API token.
+    Used by GitHub Actions workflows. Requires a user-created API token;
+    dashboard login sessions are refused so a hijacked browser session
+    cannot export cloud secrets.
 
     Returns the first active GCP credential for the user.
     """
@@ -89,7 +90,7 @@ def get_gcp_credentials(
         .filter(
             CloudCredential.user_id == current_user.id,
             CloudCredential.provider == "gcp",
-            CloudCredential.is_active == True,
+            CloudCredential.is_active.is_(True),
         )
         .first()
     )
@@ -102,6 +103,8 @@ def get_gcp_credentials(
 
     # Decrypt and return credentials
     decrypted_creds = decrypt_credentials(credential.credentials_encrypted)
+    credential.last_used_at = datetime.now(timezone.utc)
+    db.commit()
 
     return {
         "provider": "gcp",
