@@ -2,6 +2,9 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.database import get_db
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -18,6 +21,8 @@ async def readiness_check(response: Response, db: Session = Depends(get_db)):
         db.execute(text("SELECT 1"))
         return {"status": "ready"}
     except Exception as e:
-        # Return 503 Service Unavailable if database is not ready
+        # Return 503 Service Unavailable if database is not ready.
+        # The exception text can include the DSN, so it goes to the log only.
+        logger.error(f"Readiness check failed: {e}")
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "not ready", "error": str(e)}
+        return {"status": "not ready", "error": "database unavailable"}

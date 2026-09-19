@@ -7,7 +7,7 @@ from alembic import context
 
 # Import your models here
 from app.database import Base
-from app.models import User, Environment, Deployment  # Import all models
+import app.models  # noqa: F401  Register every model on Base.metadata
 from app.config import get_settings
 
 # this is the Alembic Config object, which provides

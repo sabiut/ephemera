@@ -109,8 +109,6 @@ spec:
             secretKeyRef:
               name: ephemera-secrets
               key: SECRET_KEY
-        - name: GITHUB_APP_PRIVATE_KEY_PATH
-          value: "/tmp/github-app-key.pem"
         # AI Deployment config
         - name: AI_PROVIDER
           valueFrom:

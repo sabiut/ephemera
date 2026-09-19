@@ -107,8 +107,6 @@ spec:
             secretKeyRef:
               name: ephemera-secrets
               key: SECRET_KEY
-        - name: GITHUB_APP_PRIVATE_KEY_PATH
-          value: "/tmp/github-app-key.pem"
         resources:
           requests:
             memory: "256Mi"

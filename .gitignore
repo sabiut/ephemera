@@ -34,6 +34,7 @@ Thumbs.db
 .terraform.lock.hcl
 terraform.tfvars
 *.tfplan
+tfplan
 override.tf
 override.tf.json
 *_override.tf
@@ -53,7 +54,6 @@ PRODUCTION-ROADMAP.md
 PRODUCTION-DEPLOYMENT-GUIDE.md
 TERRAFORM-GUIDE.md
 AWS-COST-OPTIMIZATION.md
-MULTI_CLOUD_ARCHITECTURE.md
 CLOUD_PROVIDERS_ROADMAP.md
 PRIVATE-*.md
 *-PRIVATE.md

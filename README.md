@@ -9,12 +9,23 @@
 
 - **Automatic PR Environments** - Creates isolated preview environment for each pull request
 - **GitHub Integration** - Seamless GitHub App integration with webhook support
-- **Kubernetes Native** - Deploys to AWS EKS with namespace isolation
+- **Kubernetes Native** - One isolated namespace per PR, with a ResourceQuota; runs on GKE today, Terraform for EKS included
 - **Multi-Cloud Ready** - Terraform modules for AWS and GCP deployment
 - **Database Tracking** - Full lifecycle tracking with PostgreSQL and SQLAlchemy
 - **REST API** - Query and manage environments programmatically
 - **Containerized** - Docker-based development and deployment
 - **Cost Optimized** - Spot instances and auto-scaling for minimal cloud spend
+
+## Running the tests
+
+```bash
+cd api
+python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+```
+
+The suite is self-contained (SQLite, no cluster or GitHub access needed) and
+runs in CI on every pull request and before each deploy.
 
 ## Quick Start
 
@@ -35,7 +46,8 @@
 2. Configure environment:
    ```bash
    cp api/.env.example api/.env
-   # Edit api/.env with your configuration
+   # Edit api/.env: DATABASE_URL, REDIS_URL, GitHub App + OAuth settings,
+   # ENCRYPTION_KEY and BASE_DOMAIN are the ones you must fill in.
    ```
 
 3. Start services:

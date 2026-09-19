@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 from datetime import datetime
 
@@ -25,8 +25,7 @@ class APITokenResponse(APITokenBase):
     expires_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class APITokenWithToken(APITokenResponse):

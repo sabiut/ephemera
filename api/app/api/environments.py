@@ -1,47 +1,46 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from sqlalchemy.orm import Session
-from typing import List, Optional
 import logging
+from typing import List, Optional
 
-from app.database import get_db
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import get_current_user
 from app.crud import environment as environment_crud
 from app.crud import user as user_crud
-from app.crud import deployment as deployment_crud
-from app.schemas.environment import EnvironmentResponse, EnvironmentCreate
-from app.services.github import github_service
-from app.tasks.environment import provision_environment
-from app.api.dependencies import get_current_user_optional
-from app.models import User
+from app.database import get_db
+from app.models import Environment, User
+from app.schemas.environment import EnvironmentCreate, EnvironmentResponse
+from app.services.provisioning import EnvironmentRequest, request_environment
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+
+# Every route here requires a Bearer token: environments are provisioned on a
+# shared cluster and the listing exposes repository names and PR titles.
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/", response_model=List[EnvironmentResponse])
 async def list_environments(
     db: Session = Depends(get_db),
-    repository: str = None,
-    active_only: bool = False
+    repository: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = Query(100, ge=1, le=500),
 ):
-    """List all environments"""
+    """List environments, newest first."""
     if active_only:
-        environments = environment_crud.get_active_environments(db)
-    elif repository:
-        environments = environment_crud.get_environments_by_repo(db, repository)
-    else:
-        # Get all environments - limit to recent 100
-        environments = db.query(environment_crud.Environment).order_by(
-            environment_crud.Environment.created_at.desc()
-        ).limit(100).all()
-
-    return environments
+        return environment_crud.get_active_environments(db)
+    if repository:
+        return environment_crud.get_environments_by_repo(db, repository)
+    return (
+        db.query(Environment)
+        .order_by(Environment.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 @router.get("/{environment_id}", response_model=EnvironmentResponse)
-async def get_environment(
-    environment_id: int,
-    db: Session = Depends(get_db)
-):
+async def get_environment(environment_id: int, db: Session = Depends(get_db)):
     """Get environment by ID"""
     environment = environment_crud.get_environment_by_id(db, environment_id)
     if not environment:
@@ -50,10 +49,7 @@ async def get_environment(
 
 
 @router.get("/namespace/{namespace}", response_model=EnvironmentResponse)
-async def get_environment_by_namespace(
-    namespace: str,
-    db: Session = Depends(get_db)
-):
+async def get_environment_by_namespace(namespace: str, db: Session = Depends(get_db)):
     """Get environment by namespace"""
     environment = environment_crud.get_environment_by_namespace(db, namespace)
     if not environment:
@@ -61,78 +57,42 @@ async def get_environment_by_namespace(
     return environment
 
 
-@router.post("/", response_model=EnvironmentResponse)
+@router.post("/", response_model=EnvironmentResponse, status_code=202)
 async def create_environment(
     env_data: EnvironmentCreate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional)
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Create a new preview environment for a PR.
-    Called by GitHub Actions workflow with Bearer token authentication.
+    Create (or re-provision) a preview environment for a PR.
 
-    The authenticated user's cloud credentials will be used for provisioning.
+    Called by GitHub Actions workflows with a Bearer token. If a live
+    environment already exists for the PR it is returned unchanged.
     """
-    logger.info(f"Creating environment for PR #{env_data.pr_number} in {env_data.repository_full_name}")
-
-    if current_user:
-        logger.info(f"Authenticated user: {current_user.github_login}")
-
-    # Check if environment already exists
-    existing_env = environment_crud.get_environment_by_pr(
-        db, env_data.repository_full_name, env_data.pr_number
+    logger.info(
+        f"{current_user.github_login} requested environment for "
+        f"PR #{env_data.pr_number} in {env_data.repository_full_name}"
     )
-    if existing_env:
-        logger.info(f"Environment already exists for PR #{env_data.pr_number}")
-        return existing_env
 
-    # Get or create user
     owner = user_crud.get_or_create_user(
         db=db,
         github_id=env_data.user_id,
         github_login=env_data.user_login,
-        avatar_url=env_data.user_avatar_url
+        avatar_url=env_data.user_avatar_url,
     )
 
-    # Build environment URL
-    env_url = github_service.build_environment_url(
-        env_data.pr_number,
-        env_data.repository_name
+    environment, action = request_environment(
+        db,
+        EnvironmentRequest(
+            repository_full_name=env_data.repository_full_name,
+            repository_name=env_data.repository_name,
+            pr_number=env_data.pr_number,
+            pr_title=env_data.pr_title,
+            branch_name=env_data.branch_name,
+            commit_sha=env_data.commit_sha,
+            installation_id=env_data.installation_id,
+            owner=owner,
+        ),
     )
-
-    # Create environment in database
-    environment = environment_crud.create_environment(
-        db=db,
-        repository_full_name=env_data.repository_full_name,
-        repository_name=env_data.repository_name,
-        pr_number=env_data.pr_number,
-        pr_title=env_data.pr_title,
-        branch_name=env_data.branch_name,
-        commit_sha=env_data.commit_sha,
-        installation_id=env_data.installation_id,
-        owner=owner,
-        environment_url=env_url
-    )
-
-    logger.info(f"Created environment {environment.namespace} for PR #{env_data.pr_number}")
-
-    # Create initial deployment
-    deployment = deployment_crud.create_deployment(
-        db=db,
-        environment=environment,
-        commit_sha=env_data.commit_sha
-    )
-
-    logger.info(f"Created deployment {deployment.id} for environment {environment.id}")
-
-    # Queue environment provisioning task
-    provision_environment.delay(
-        environment_id=environment.id,
-        installation_id=env_data.installation_id,
-        repo_full_name=env_data.repository_full_name,
-        pr_number=env_data.pr_number,
-        commit_sha=env_data.commit_sha
-    )
-
+    logger.info(f"Environment {environment.namespace}: {action}")
     return environment

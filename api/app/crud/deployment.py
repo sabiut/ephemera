@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from app.models.deployment import Deployment, DeploymentStatus
 from app.models.environment import Environment
 
@@ -63,10 +63,10 @@ def update_deployment_status(
     deployment.status = status
 
     if status == DeploymentStatus.IN_PROGRESS and not deployment.started_at:
-        deployment.started_at = datetime.utcnow()
+        deployment.started_at = datetime.now(timezone.utc)
 
     if status in [DeploymentStatus.SUCCESS, DeploymentStatus.FAILED]:
-        deployment.completed_at = datetime.utcnow()
+        deployment.completed_at = datetime.now(timezone.utc)
 
     if error_message:
         deployment.error_message = error_message
