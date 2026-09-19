@@ -68,3 +68,30 @@ def test_oauth_login_sets_state_cookie_and_callback_checks_it(client):
 def test_environments_require_auth(client):
     assert client.get("/api/v1/environments/").status_code == 401
     assert client.post("/api/v1/environments/", json={}).status_code == 401
+
+
+def test_session_tokens_cannot_export_cloud_credentials(client, db_session, user, auth_headers):
+    from app.core.encryption import encrypt_credentials
+    from app.models import CloudCredential, CloudProvider
+
+    db_session.add(CloudCredential(
+        user_id=user.id, provider=CloudProvider.GCP,
+        credentials_encrypted=encrypt_credentials('{"type": "service_account"}'), is_active=True,
+    ))
+    db_session.commit()
+
+    # A user-created API token may export
+    ok = client.get("/api/v1/credentials/gcp", headers=auth_headers)
+    assert ok.status_code == 200
+    assert ok.json()["credentials_json"] == '{"type": "service_account"}'
+
+    # A dashboard login session may not
+    from app.services.auth import GitHubOAuthService
+    session_raw = GitHubOAuthService().create_session_token(db_session, user)
+    denied = client.get("/api/v1/credentials/gcp", headers={"Authorization": f"Bearer {session_raw}"})
+    assert denied.status_code == 403
+
+    # ...but it can still do ordinary dashboard things
+    assert client.get("/api/v1/credentials/", headers={"Authorization": f"Bearer {session_raw}"}).status_code == 200
+    listed = client.get("/api/v1/tokens/", headers=auth_headers).json()
+    assert {t["token_type"] for t in listed} == {"api", "session"}

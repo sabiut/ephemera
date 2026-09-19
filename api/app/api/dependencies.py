@@ -3,7 +3,7 @@ API dependencies for authentication and authorization
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
@@ -25,9 +25,9 @@ def _unauthorized(detail: str) -> HTTPException:
     )
 
 
-def authenticate_token(db: Session, authorization: Optional[str]) -> User:
+def authenticate_token(db: Session, authorization: Optional[str]) -> Tuple[User, APIToken]:
     """
-    Resolve an Authorization header of the form ``Bearer eph_...`` to a User.
+    Resolve an Authorization header of the form ``Bearer eph_...`` to (User, APIToken).
 
     Raises HTTPException(401) on any failure.
     """
@@ -64,7 +64,15 @@ def authenticate_token(db: Session, authorization: Optional[str]) -> User:
     token.last_used_at = now
     db.commit()
 
-    return user
+    return user, token
+
+
+async def get_current_token(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+) -> APIToken:
+    """The APIToken that authenticated this request."""
+    return authenticate_token(db, authorization)[1]
 
 
 async def get_current_user(
@@ -72,7 +80,20 @@ async def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     """Get current authenticated user from Bearer token."""
-    return authenticate_token(db, authorization)
+    return authenticate_token(db, authorization)[0]
+
+
+async def require_api_token(token: APIToken = Depends(get_current_token)) -> APIToken:
+    """
+    Only user-created API tokens may pass. Dashboard session tokens live in
+    the browser (localStorage) and must not be able to export cloud secrets.
+    """
+    if token.token_type != APIToken.TYPE_API:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint requires an API token created from the dashboard, not a login session.",
+        )
+    return token
 
 
 async def get_current_user_optional(
@@ -83,6 +104,6 @@ async def get_current_user_optional(
     if not authorization:
         return None
     try:
-        return authenticate_token(db, authorization)
+        return authenticate_token(db, authorization)[0]
     except HTTPException:
         return None
