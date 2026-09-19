@@ -5,7 +5,7 @@ API token management endpoints
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.database import get_db
 from app.models import APIToken, User
@@ -31,14 +31,13 @@ def create_token(
 
     WARNING: The full token is only shown once! Save it securely.
     """
-    # Generate token
+    # Generate token; only its hash is persisted
     token = APIToken.generate_token()
     token_prefix = token[:8]  # First 8 chars for display
 
-    # Create token record
     db_token = APIToken(
         user_id=current_user.id,
-        token=token,
+        token_hash=APIToken.hash_token(token),
         token_prefix=token_prefix,
         name=token_data.name,
         description=token_data.description,
@@ -50,11 +49,11 @@ def create_token(
     db.commit()
     db.refresh(db_token)
 
-    # Return response with full token
-    response = APITokenWithToken.model_validate(db_token)
-    response.token = token  # Add full token to response
-
-    return response
+    # The raw token is returned exactly once
+    return APITokenWithToken(
+        **APITokenResponse.model_validate(db_token).model_dump(),
+        token=token,
+    )
 
 
 @router.get("/", response_model=List[APITokenResponse])
@@ -71,7 +70,7 @@ def list_tokens(
     query = db.query(APIToken).filter(APIToken.user_id == current_user.id)
 
     if not include_revoked:
-        query = query.filter(APIToken.is_active == True, APIToken.revoked_at.is_(None))
+        query = query.filter(APIToken.is_active.is_(True), APIToken.revoked_at.is_(None))
 
     tokens = query.order_by(APIToken.created_at.desc()).all()
     return tokens
@@ -140,7 +139,7 @@ def revoke_token(
         )
 
     # Revoke the token
-    token.revoked_at = datetime.utcnow()
+    token.revoked_at = datetime.now(timezone.utc)
     token.is_active = False
 
     db.commit()

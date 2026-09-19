@@ -7,17 +7,17 @@ class GitHubRepository(BaseModel):
     id: int
     name: str
     full_name: str
-    private: bool
-    html_url: str
-    clone_url: str
-    default_branch: str
+    private: bool = False
+    html_url: Optional[str] = None
+    clone_url: Optional[str] = None
+    default_branch: Optional[str] = None
 
 
 class GitHubUser(BaseModel):
     id: int
     login: str
-    avatar_url: str
-    html_url: str
+    avatar_url: Optional[str] = None
+    html_url: Optional[str] = None
 
 
 class GitHubPullRequest(BaseModel):
@@ -25,12 +25,12 @@ class GitHubPullRequest(BaseModel):
     number: int
     title: str
     state: str
-    html_url: str
+    html_url: Optional[str] = None
     head: Dict[str, Any]  # Contains ref (branch name), sha, repo
     base: Dict[str, Any]  # Contains ref (target branch), sha, repo
     user: GitHubUser
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     merged: Optional[bool] = False
     draft: Optional[bool] = False
 

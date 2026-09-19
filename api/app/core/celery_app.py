@@ -8,16 +8,20 @@ This module configures Celery for async task processing, including:
 """
 
 import ssl
+
 from celery import Celery
+
 from app.config import settings
 
-# SSL configuration for Redis with TLS
-broker_use_ssl = {
-    'ssl_cert_reqs': ssl.CERT_NONE,
-}
-backend_use_ssl = {
-    'ssl_cert_reqs': ssl.CERT_NONE,
-}
+
+def _ssl_options(url: str):
+    """Return kombu SSL options for a rediss:// URL, or None for plain redis://."""
+    if not url or not url.startswith("rediss://"):
+        return None
+    return {
+        "ssl_cert_reqs": ssl.CERT_REQUIRED if settings.redis_ssl_verify else ssl.CERT_NONE,
+    }
+
 
 # Create Celery app
 celery_app = Celery(
@@ -45,8 +49,6 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     result_expires=3600,  # 1 hour
-    broker_use_ssl=broker_use_ssl,  # SSL config for Redis broker
-    redis_backend_use_ssl=backend_use_ssl,  # SSL config for Redis backend
     beat_schedule={
         "cleanup-stale-environments": {
             "task": "app.tasks.cleanup.cleanup_stale_environments",
@@ -54,6 +56,13 @@ celery_app.conf.update(
         },
     },
 )
+
+broker_ssl = _ssl_options(settings.celery_broker_url)
+if broker_ssl:
+    celery_app.conf.broker_use_ssl = broker_ssl
+backend_ssl = _ssl_options(settings.celery_result_backend)
+if backend_ssl:
+    celery_app.conf.redis_backend_use_ssl = backend_ssl
 
 # Task routes
 celery_app.conf.task_routes = {

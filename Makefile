@@ -8,13 +8,13 @@ help:
 	@echo "  make clean      - Clean up containers"
 
 install:
-	cd api && pip install -r requirements.txt
+	cd api && pip install -r requirements-dev.txt
 
 dev:
 	docker-compose up --build
 
 test:
-	pytest tests/
+	cd api && python -m pytest -q
 
 clean:
 	docker-compose down -v

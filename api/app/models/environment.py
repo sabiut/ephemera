@@ -1,8 +1,9 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum as SQLEnum, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
 import enum
+import re
 
 
 class EnvironmentStatus(str, enum.Enum):
@@ -18,6 +19,9 @@ class EnvironmentStatus(str, enum.Enum):
 
 class Environment(Base):
     __tablename__ = "environments"
+    __table_args__ = (
+        UniqueConstraint("repository_full_name", "pr_number", name="uq_environments_repo_pr"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -65,7 +69,16 @@ class Environment(Base):
 
     def generate_namespace(self) -> str:
         """Generate Kubernetes namespace name"""
-        # Format: pr-{number}-{repo-name}
-        # Max 63 chars, must be lowercase alphanumeric or '-'
-        repo_slug = self.repository_name.lower().replace("_", "-")[:20]
-        return f"pr-{self.pr_number}-{repo_slug}"
+        return build_namespace(self.repository_name, self.pr_number)
+
+
+def build_namespace(repository_name: str, pr_number: int) -> str:
+    """
+    Build the Kubernetes namespace for a PR: pr-{number}-{repo-slug}.
+
+    Namespaces must be DNS labels (max 63 chars, lowercase alphanumeric or '-').
+    The same slug is used as the prefix of every preview hostname, so it is
+    also what the manifest validator checks Ingress hosts against.
+    """
+    slug = re.sub(r"[^a-z0-9-]+", "-", repository_name.lower()).strip("-")[:20].rstrip("-")
+    return f"pr-{pr_number}-{slug or 'repo'}"

@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from app.models.environment import Environment, EnvironmentStatus
 from app.models.user import User
 
@@ -97,10 +97,34 @@ def update_environment_status(
     if error_message:
         environment.error_message = error_message
     if status == EnvironmentStatus.READY:
-        environment.last_deployed_at = datetime.utcnow()
+        environment.last_deployed_at = datetime.now(timezone.utc)
     if status == EnvironmentStatus.DESTROYED:
-        environment.destroyed_at = datetime.utcnow()
+        environment.destroyed_at = datetime.now(timezone.utc)
 
+    db.commit()
+    db.refresh(environment)
+    return environment
+
+
+def reset_environment(
+    db: Session,
+    environment: Environment,
+    pr_title: Optional[str],
+    branch_name: str,
+    commit_sha: str,
+    installation_id: int,
+    environment_url: Optional[str] = None,
+) -> Environment:
+    """Bring a destroyed/failed environment back to PENDING for re-provisioning."""
+    environment.pr_title = pr_title
+    environment.branch_name = branch_name
+    environment.commit_sha = commit_sha
+    environment.installation_id = installation_id
+    if environment_url:
+        environment.environment_url = environment_url
+    environment.status = EnvironmentStatus.PENDING
+    environment.error_message = None
+    environment.destroyed_at = None
     db.commit()
     db.refresh(environment)
     return environment

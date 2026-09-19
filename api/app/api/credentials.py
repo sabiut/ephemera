@@ -4,8 +4,8 @@ Cloud credentials management endpoints
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
-from datetime import datetime
+from typing import List, Optional
+from datetime import datetime, timezone
 
 from app.database import get_db
 from app.models import CloudCredential, User
@@ -53,7 +53,7 @@ def create_credential(
 
 @router.get("/", response_model=List[CloudCredentialResponse])
 def list_credentials(
-    provider: str = None,
+    provider: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -89,7 +89,7 @@ def get_gcp_credentials(
         .filter(
             CloudCredential.user_id == current_user.id,
             CloudCredential.provider == "gcp",
-            CloudCredential.is_active == True,
+            CloudCredential.is_active.is_(True),
         )
         .first()
     )
@@ -102,6 +102,8 @@ def get_gcp_credentials(
 
     # Decrypt and return credentials
     decrypted_creds = decrypt_credentials(credential.credentials_encrypted)
+    credential.last_used_at = datetime.now(timezone.utc)
+    db.commit()
 
     return {
         "provider": "gcp",

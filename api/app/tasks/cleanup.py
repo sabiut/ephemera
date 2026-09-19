@@ -8,7 +8,7 @@ These tasks handle:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 from celery import Task
 from sqlalchemy.orm import Session
@@ -52,7 +52,7 @@ def cleanup_stale_environments(self):
     """
     logger.info("Starting stale environment cleanup")
 
-    stale_threshold = datetime.utcnow() - timedelta(minutes=30)
+    stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=30)
     cleaned_count = 0
 
     try:
@@ -69,9 +69,8 @@ def cleanup_stale_environments(self):
         for env in provisioning_envs:
             logger.warning(f"Cleaning up stale environment {env.id} stuck in PROVISIONING")
 
-            # Try to delete namespace if it exists
-            if kubernetes_service.namespace_exists(env.namespace):
-                kubernetes_service.delete_namespace(env.namespace)
+            # delete_namespace tolerates a missing namespace
+            kubernetes_service.delete_namespace(env.namespace)
 
             # Mark as failed
             environment_crud.update_environment_status(
@@ -95,9 +94,8 @@ def cleanup_stale_environments(self):
         for env in destroying_envs:
             logger.warning(f"Cleaning up stale environment {env.id} stuck in DESTROYING")
 
-            # Force delete namespace
-            if kubernetes_service.namespace_exists(env.namespace):
-                kubernetes_service.delete_namespace(env.namespace)
+            # Force delete namespace (tolerates a missing one)
+            kubernetes_service.delete_namespace(env.namespace)
 
             # Mark as destroyed
             environment_crud.update_environment_status(
@@ -115,7 +113,8 @@ def cleanup_stale_environments(self):
         logger.info(f"Checking {len(ready_envs)} READY environments for namespace existence")
 
         for env in ready_envs:
-            if not kubernetes_service.namespace_exists(env.namespace):
+            # None means "unknown" (API error); only act on a definite miss
+            if kubernetes_service.namespace_exists(env.namespace) is False:
                 logger.warning(f"Environment {env.id} in READY state but namespace {env.namespace} doesn't exist")
 
                 # Mark as failed
@@ -155,7 +154,7 @@ def cleanup_old_environments(self, days: int = 7):
     """
     logger.info(f"Starting cleanup of environments destroyed more than {days} days ago")
 
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
     deleted_count = 0
 
     try:
@@ -203,7 +202,7 @@ def retry_failed_environments(self, max_age_hours: int = 1):
     """
     logger.info(f"Looking for failed environments to retry (within last {max_age_hours} hours)")
 
-    cutoff_date = datetime.utcnow() - timedelta(hours=max_age_hours)
+    cutoff_date = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     retry_count = 0
 
     try:

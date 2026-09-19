@@ -59,6 +59,12 @@ class ManifestValidator:
     # Valid DNS label pattern for K8s resource names
     DNS_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$")
 
+    def __init__(self, base_domain: Optional[str] = None):
+        # When set, every Ingress host must be {namespace}-<something>.{base_domain}.
+        # This stops a PR's compose file (or a prompt-injected README) from
+        # steering the shared ingress controller to hijack another hostname.
+        self.base_domain = base_domain
+
     def validate_all(
         self, manifests: Any, expected_namespace: str
     ) -> ValidationResult:
@@ -69,6 +75,7 @@ class ManifestValidator:
         Namespace mismatches are corrected (not rejected).
         """
         result = ValidationResult()
+        self._expected_namespace = expected_namespace
 
         # Must be a list
         if not isinstance(manifests, list):
@@ -286,43 +293,38 @@ class ManifestValidator:
                 )
                 return
 
-        # Validate resource limits are within bounds
+        # Cap resource limits so one preview cannot starve the cluster
         resources = container.get("resources", {})
         if isinstance(resources, dict):
             limits = resources.get("limits", {})
             if isinstance(limits, dict):
-                self._check_resource_limit(
-                    limits.get("cpu"), "cpu", prefix, result
-                )
-                self._check_resource_limit(
-                    limits.get("memory"), "memory", prefix, result
-                )
+                self._cap_resource_limit(limits, "cpu", prefix, result)
+                self._cap_resource_limit(limits, "memory", prefix, result)
 
-    def _check_resource_limit(
+    def _cap_resource_limit(
         self,
-        value: Optional[str],
+        limits: Dict[str, Any],
         resource_type: str,
         prefix: str,
         result: ValidationResult,
     ):
-        """Check that a resource limit is within bounds."""
+        """Clamp a resource limit to the maximum, editing ``limits`` in place."""
+        value = limits.get(resource_type)
         if not value:
             return
 
         try:
             if resource_type == "cpu":
-                millicores = self._parse_cpu(value)
-                if millicores > self.MAX_CPU_LIMIT_MILLICORES:
+                if self._parse_cpu(value) > self.MAX_CPU_LIMIT_MILLICORES:
+                    limits["cpu"] = f"{self.MAX_CPU_LIMIT_MILLICORES}m"
                     result.add_warning(
-                        f"{prefix}: CPU limit {value} exceeds maximum "
-                        f"{self.MAX_CPU_LIMIT_MILLICORES}m, will be capped"
+                        f"{prefix}: CPU limit {value} capped to {limits['cpu']}"
                     )
             elif resource_type == "memory":
-                mi = self._parse_memory_mi(value)
-                if mi > self.MAX_MEMORY_LIMIT_MI:
+                if self._parse_memory_mi(value) > self.MAX_MEMORY_LIMIT_MI:
+                    limits["memory"] = f"{self.MAX_MEMORY_LIMIT_MI}Mi"
                     result.add_warning(
-                        f"{prefix}: Memory limit {value} exceeds maximum "
-                        f"{self.MAX_MEMORY_LIMIT_MI}Mi, will be capped"
+                        f"{prefix}: Memory limit {value} capped to {limits['memory']}"
                     )
         except ValueError:
             result.add_warning(
@@ -349,12 +351,37 @@ class ManifestValidator:
     def _validate_ingress(
         self, prefix: str, name: str, spec: Dict, result: ValidationResult
     ):
-        """Validate Ingress-specific fields."""
+        """Validate Ingress-specific fields, including hostname ownership."""
         rules = spec.get("rules", [])
         if not rules:
             result.add_warning(
                 f"{prefix} (Ingress/{name}): No rules defined"
             )
+
+        hosts = [r.get("host") for r in rules if isinstance(r, dict)]
+        for tls in spec.get("tls", []) or []:
+            if isinstance(tls, dict):
+                hosts.extend(tls.get("hosts", []) or [])
+
+        for host in hosts:
+            if not host:
+                result.add_error(
+                    f"{prefix} (Ingress/{name}): Ingress rules must specify a host"
+                )
+            elif not self.is_allowed_host(host):
+                result.add_error(
+                    f"{prefix} (Ingress/{name}): Host '{host}' is outside this "
+                    f"environment. Allowed: {self._expected_namespace}-<service>.{self.base_domain}"
+                )
+
+    def is_allowed_host(self, host: str) -> bool:
+        """A host is allowed when it is {namespace}-<label>.{base_domain}."""
+        if not self.base_domain:
+            return True
+        pattern = re.compile(
+            rf"^{re.escape(self._expected_namespace)}-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.{re.escape(self.base_domain)}$"
+        )
+        return bool(pattern.match(host.lower()))
 
     def _validate_pvc(
         self, prefix: str, name: str, spec: Dict, result: ValidationResult
