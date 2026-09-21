@@ -101,7 +101,7 @@ alembic upgrade head
 │    - Exchange code for GitHub token                     │
 │    - Get GitHub user info                               │
 │    - Create/update user in database                     │
-│    - Generate session token                             │
+│    - Generate session token, set as HttpOnly cookie     │
 │    - Redirect to dashboard                              │
 └────────────────────────┬────────────────────────────────┘
                          │
@@ -118,8 +118,9 @@ alembic upgrade head
 
 ### Authentication
 - `GET /auth/github/login` - Initiate OAuth flow
-- `GET /auth/github/callback` - OAuth callback handler
+- `GET /auth/github/callback` - OAuth callback handler; sets the `ephemera_session` cookie and redirects to `/dashboard`
 - `GET /auth/me` - Get current user info
+- `POST /auth/logout` - Revoke the session and clear the cookie
 
 ### Credentials
 - `POST /api/v1/credentials/` - Add cloud credentials
@@ -138,5 +139,8 @@ alembic upgrade head
 - All credentials are encrypted using Fernet (symmetric encryption)
 - Encryption key must be kept secure and backed up
 - API tokens are hashed and only shown once during creation
-- GitHub OAuth uses industry-standard OAuth 2.0 flow
+- GitHub OAuth uses industry-standard OAuth 2.0 flow, with the `state` parameter checked against a short-lived cookie
+- The dashboard session is an HttpOnly, SameSite=Lax cookie (`Secure` outside development). Page scripts cannot read it, so a cross-site scripting bug in the dashboard cannot steal the session. Only session tokens are accepted from the cookie; API tokens must be sent as a Bearer header.
+- Cookie-authenticated requests that are not GET/HEAD/OPTIONS must carry an `X-Requested-With` header. A cross-origin page cannot add that header without a CORS preflight this API does not grant, which is what stops cross-site request forgery. The dashboard sends it on every call.
+- Sessions cannot export stored cloud credentials; that needs an API token created from the dashboard
 - HTTPS required for production use

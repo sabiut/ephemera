@@ -3,40 +3,37 @@
 const API_BASE = window.location.origin;
 
 // ─── Auth ───────────────────────────────────────────────
+//
+// The session is an HttpOnly cookie set by the OAuth callback. Scripts never
+// see it; the browser attaches it to same-origin requests. The server
+// requires X-Requested-With on any non-GET cookie-authenticated request as
+// CSRF protection, so apiCall always sends it.
 
-function getToken() {
-    const token = localStorage.getItem('ephemera_token');
-    if (!token) {
-        window.location.href = '/';
-        return null;
+async function logout() {
+    try {
+        await apiCall('/auth/logout', { method: 'POST' });
+    } catch (e) {
+        console.error('Logout failed:', e);
     }
-    return token;
-}
-
-function logout() {
-    localStorage.removeItem('ephemera_token');
     window.location.href = '/';
 }
 
 // ─── API Helper ─────────────────────────────────────────
 
 async function apiCall(endpoint, options = {}) {
-    const token = getToken();
-    if (!token) return;
-
     const headers = {
-        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
+        'X-Requested-With': 'ephemera-dashboard',
         ...options.headers
     };
 
     const response = await fetch(`${API_BASE}${endpoint}`, {
+        credentials: 'same-origin',
         ...options,
         headers
     });
 
     if (response.status === 401) {
-        localStorage.removeItem('ephemera_token');
         window.location.href = '/';
         return;
     }
