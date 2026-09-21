@@ -1,7 +1,9 @@
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from github import Auth, Github, GithubIntegration
+from github.GithubException import GithubException, UnknownObjectException
 
 from app.config import get_settings
 from app.models.environment import build_namespace
@@ -35,6 +37,22 @@ def _load_private_key() -> Optional[str]:
     return None
 
 
+class GitHubUnavailable(RuntimeError):
+    """The GitHub App is not configured, so nothing can be verified against GitHub."""
+
+
+@dataclass
+class PullRequestInfo:
+    number: int
+    title: str
+    state: str
+    head_sha: str
+    head_ref: str
+    author_id: int
+    author_login: str
+    author_avatar_url: Optional[str]
+
+
 class GitHubService:
     """Service for interacting with GitHub API using GitHub App authentication"""
 
@@ -66,6 +84,68 @@ class GitHubService:
 
         token = self.integration.get_access_token(installation_id).token
         return Github(auth=Auth.Token(token))
+
+    def get_repo_installation_id(self, repo_full_name: str) -> Optional[int]:
+        """
+        The id of this App's installation that covers the repository, or None
+        if the App is not installed there.
+
+        Looked up with the App's own credentials, so it cannot be spoofed by
+        an API caller: whatever installation id a client sends, the one used
+        is the one GitHub says owns the repository.
+        """
+        if not self.integration:
+            raise GitHubUnavailable("GitHub App integration not configured")
+        owner, _, repo = repo_full_name.partition("/")
+        try:
+            return self.integration.get_repo_installation(owner, repo).id
+        except UnknownObjectException:
+            return None
+        except GithubException as e:
+            # 403 is what GitHub returns for "installed, but not on this repo"
+            # as well as for a repo the App cannot see at all.
+            if e.status in (403, 404):
+                return None
+            raise
+
+    def get_pull_request(
+        self, installation_id: int, repo_full_name: str, pr_number: int
+    ) -> Optional[PullRequestInfo]:
+        """Fetch a pull request through the installation, or None if it does not exist."""
+        client = self.get_installation_client(installation_id)
+        if not client:
+            raise GitHubUnavailable("GitHub App integration not configured")
+        try:
+            pr = client.get_repo(repo_full_name).get_pull(pr_number)
+        except UnknownObjectException:
+            return None
+        return PullRequestInfo(
+            number=pr.number,
+            title=pr.title,
+            state=pr.state,
+            head_sha=pr.head.sha,
+            head_ref=pr.head.ref,
+            author_id=pr.user.id,
+            author_login=pr.user.login,
+            author_avatar_url=pr.user.avatar_url,
+        )
+
+    def is_collaborator(self, installation_id: int, repo_full_name: str, login: str) -> Optional[bool]:
+        """
+        Whether the login has collaborator access to the repository.
+
+        Returns None when the check could not be performed (for example the
+        App lacks the Metadata permission), so callers can fail closed with a
+        useful message instead of treating an error as "no".
+        """
+        client = self.get_installation_client(installation_id)
+        if not client:
+            raise GitHubUnavailable("GitHub App integration not configured")
+        try:
+            return client.get_repo(repo_full_name).has_in_collaborators(login)
+        except GithubException as e:
+            logger.warning(f"Collaborator check for {login} on {repo_full_name} failed: {e.status} {e.data}")
+            return None
 
     def post_comment_to_pr(
         self,

@@ -132,7 +132,13 @@ GET /api/v1/environments/?repository=owner/repo
 
 # Active environments only
 GET /api/v1/environments/?active_only=true
+
+# Create (or re-provision) the environment for a pull request
+POST /api/v1/environments/
+{"repository_full_name": "owner/repo", "pr_number": 42}
 ```
+
+Creating an environment takes nothing about the repository on trust. The server looks the PR up through the GitHub App: the installation used is the one GitHub reports for the repository, the PR must exist, and its author becomes the environment's owner. The caller must be the PR author, a collaborator on the repository, or an admin. `pr_title`, `branch_name` and `commit_sha` may be supplied (a GitHub Actions run knows its own head commit) and otherwise default to the PR's current values. An `installation_id` in the body must match GitHub's or the request is rejected.
 
 ### Webhooks
 
