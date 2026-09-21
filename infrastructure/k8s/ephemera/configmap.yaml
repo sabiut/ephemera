@@ -7,6 +7,8 @@ data:
   # Application
   ENVIRONMENT: "production"
   BASE_DOMAIN: "devpreview.app"
+  # GitHub logins that see every environment; everyone else sees only their own PRs
+  ADMIN_GITHUB_LOGINS: "sabiut"
 
   # Kubernetes (will use in-cluster config)
   KUBECONFIG_PATH: ""

@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.models import APIToken, User
 
@@ -107,3 +108,14 @@ async def get_current_user_optional(
         return authenticate_token(db, authorization)[0]
     except HTTPException:
         return None
+
+
+def is_admin(user: User) -> bool:
+    """
+    Admins see every environment; everyone else sees only their own.
+
+    Membership is configured with ADMIN_GITHUB_LOGINS rather than stored on
+    the user row, so granting or revoking it is a config change, not a
+    migration or a database edit.
+    """
+    return user.github_login.lower() in settings.admin_login_set

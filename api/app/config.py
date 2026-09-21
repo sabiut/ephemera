@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     encryption_key: Optional[str] = None
     # Comma-separated list of allowed CORS origins. Empty means same-origin only.
     cors_origins: str = ""
+    # Comma-separated GitHub logins that see every environment in the API and
+    # dashboard. Everyone else sees only environments for their own PRs.
+    admin_github_logins: str = ""
 
     # Preview namespace quotas
     preview_cpu_quota: str = "1"
@@ -87,6 +90,11 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def admin_login_set(self) -> set[str]:
+        """Lower-cased admin logins; GitHub logins are case-insensitive."""
+        return {o.strip().lower() for o in self.admin_github_logins.split(",") if o.strip()}
 
 
 @lru_cache()

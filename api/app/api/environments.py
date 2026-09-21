@@ -4,11 +4,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, is_admin
 from app.crud import environment as environment_crud
 from app.crud import user as user_crud
 from app.database import get_db
-from app.models import Environment, User
+from app.models import User
 from app.schemas.environment import EnvironmentCreate, EnvironmentResponse
 from app.services.provisioning import EnvironmentRequest, request_environment
 
@@ -16,42 +16,58 @@ logger = logging.getLogger(__name__)
 
 # Every route here requires a Bearer token: environments are provisioned on a
 # shared cluster and the listing exposes repository names and PR titles.
+#
+# Reads are scoped to the caller. A user sees environments for PRs they
+# authored; logins in ADMIN_GITHUB_LOGINS see everything. A lookup of someone
+# else's environment is a 404, not a 403, so ids and namespaces cannot be
+# probed for existence.
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/", response_model=List[EnvironmentResponse])
 async def list_environments(
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     repository: Optional[str] = None,
     active_only: bool = False,
     limit: int = Query(100, ge=1, le=500),
 ):
-    """List environments, newest first."""
-    if active_only:
-        return environment_crud.get_active_environments(db)
-    if repository:
-        return environment_crud.get_environments_by_repo(db, repository)
-    return (
-        db.query(Environment)
-        .order_by(Environment.created_at.desc())
-        .limit(limit)
-        .all()
+    """List the caller's visible environments, newest first."""
+    return environment_crud.list_environments(
+        db,
+        current_user,
+        is_admin(current_user),
+        repository=repository,
+        active_only=active_only,
+        limit=limit,
     )
 
 
 @router.get("/{environment_id}", response_model=EnvironmentResponse)
-async def get_environment(environment_id: int, db: Session = Depends(get_db)):
-    """Get environment by ID"""
-    environment = environment_crud.get_environment_by_id(db, environment_id)
+async def get_environment(
+    environment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get one of the caller's visible environments by ID"""
+    environment = environment_crud.get_visible_environment(
+        db, current_user, is_admin(current_user), environment_id=environment_id
+    )
     if not environment:
         raise HTTPException(status_code=404, detail="Environment not found")
     return environment
 
 
 @router.get("/namespace/{namespace}", response_model=EnvironmentResponse)
-async def get_environment_by_namespace(namespace: str, db: Session = Depends(get_db)):
-    """Get environment by namespace"""
-    environment = environment_crud.get_environment_by_namespace(db, namespace)
+async def get_environment_by_namespace(
+    namespace: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get one of the caller's visible environments by namespace"""
+    environment = environment_crud.get_visible_environment(
+        db, current_user, is_admin(current_user), namespace=namespace
+    )
     if not environment:
         raise HTTPException(status_code=404, detail="Environment not found")
     return environment

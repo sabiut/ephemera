@@ -121,6 +121,7 @@ let cachedEnvironments = [];
 let cachedCredentials = [];
 let cachedTokens = [];
 let refreshInterval = null;
+let isAdmin = false;
 
 async function loadView(view) {
     switch (view) {
@@ -188,6 +189,7 @@ async function loadUserInfo() {
     try {
         const user = await apiCall('/auth/me');
         if (user) {
+            isAdmin = Boolean(user.is_admin);
             document.getElementById('userName').textContent = user.github_login;
             document.getElementById('userAvatar').src = user.avatar_url || '';
         }
@@ -225,7 +227,9 @@ function envTableHTML(envs) {
                 <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
                 </svg>
-                <p>No environments yet. Create a PR on a connected repository to get started.</p>
+                <p>${isAdmin
+                    ? 'No environments yet. Create a PR on a connected repository to get started.'
+                    : 'No environments for your pull requests yet. You see environments for PRs you opened; admins see everything.'}</p>
             </div>
         `;
     }
