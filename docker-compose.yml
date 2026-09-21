@@ -22,15 +22,14 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./api:/app
-      - ~/.kube:/root/.kube:ro
-      - ./gke-service-account-key.json:/tmp/gke-service-account-key.json:ro
+      # Read-only kubeconfig for the non-root 'app' user. It must use static
+      # credentials or a local cluster; the image no longer has gcloud.
+      - ~/.kube:/home/app/.kube:ro
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ephemera
       - REDIS_URL=redis://redis:6379/0
-      - GOOGLE_APPLICATION_CREDENTIALS=/tmp/gke-service-account-key.json
-      - USE_GKE_GCLOUD_AUTH_PLUGIN=True
     env_file:
       - ./api/.env
     depends_on:
@@ -44,13 +43,12 @@ services:
     command: celery -A app.core.celery_app worker --loglevel=info --queues=environment,cleanup
     volumes:
       - ./api:/app
-      - ~/.kube:/root/.kube:ro
-      - ./gke-service-account-key.json:/tmp/gke-service-account-key.json:ro
+      # Read-only kubeconfig for the non-root 'app' user. It must use static
+      # credentials or a local cluster; the image no longer has gcloud.
+      - ~/.kube:/home/app/.kube:ro
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ephemera
       - REDIS_URL=redis://redis:6379/0
-      - GOOGLE_APPLICATION_CREDENTIALS=/tmp/gke-service-account-key.json
-      - USE_GKE_GCLOUD_AUTH_PLUGIN=True
     env_file:
       - ./api/.env
     depends_on:

@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+tests
+test.db
+.env
+*.pem
+github-app-key.pem
+Dockerfile
+.dockerignore
