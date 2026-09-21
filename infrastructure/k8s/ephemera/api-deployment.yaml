@@ -38,6 +38,11 @@ spec:
             configMapKeyRef:
               name: ephemera-config
               key: BASE_DOMAIN
+        - name: ADMIN_GITHUB_LOGINS
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: ADMIN_GITHUB_LOGINS
         - name: KUBECONFIG_PATH
           valueFrom:
             configMapKeyRef:

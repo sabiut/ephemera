@@ -115,8 +115,10 @@ See [GitHub App Setup Guide](docs/github-app-setup.md) for detailed instructions
 
 ### Environments
 
+All environment routes require a Bearer token. Reads are scoped to the caller: you see environments for pull requests you authored, and GitHub logins listed in `ADMIN_GITHUB_LOGINS` see every environment. Someone else's environment returns 404. `GET /auth/me` reports `is_admin`.
+
 ```bash
-# List all environments
+# List your visible environments, newest first
 GET /api/v1/environments/
 
 # Get specific environment

@@ -1,8 +1,58 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Query, Session
 from typing import Optional, List
 from datetime import datetime, timezone
 from app.models.environment import Environment, EnvironmentStatus
 from app.models.user import User
+
+ACTIVE_STATUSES = (
+    EnvironmentStatus.PENDING,
+    EnvironmentStatus.PROVISIONING,
+    EnvironmentStatus.READY,
+    EnvironmentStatus.UPDATING,
+)
+
+
+def visible_environments(db: Session, user: User, admin: bool) -> Query:
+    """
+    Environments this user may see.
+
+    Every environment is owned by the PR author (the webhook and the API both
+    resolve the author to a User row), so a non-admin sees exactly the
+    environments for PRs they opened. Admins see everything.
+    """
+    query = db.query(Environment)
+    if not admin:
+        query = query.filter(Environment.owner_id == user.id)
+    return query
+
+
+def list_environments(
+    db: Session,
+    user: User,
+    admin: bool,
+    repository: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = 100,
+) -> List[Environment]:
+    """List visible environments, newest first, with optional filters."""
+    query = visible_environments(db, user, admin)
+    if repository:
+        query = query.filter(Environment.repository_full_name == repository)
+    if active_only:
+        query = query.filter(Environment.status.in_(ACTIVE_STATUSES))
+    return query.order_by(Environment.created_at.desc(), Environment.id.desc()).limit(limit).all()
+
+
+def get_visible_environment(
+    db: Session, user: User, admin: bool, environment_id: Optional[int] = None, namespace: Optional[str] = None
+) -> Optional[Environment]:
+    """Fetch one environment by id or namespace, or None if absent or not visible."""
+    query = visible_environments(db, user, admin)
+    if environment_id is not None:
+        query = query.filter(Environment.id == environment_id)
+    if namespace is not None:
+        query = query.filter(Environment.namespace == namespace)
+    return query.first()
 
 
 def get_environment_by_id(db: Session, environment_id: int) -> Optional[Environment]:
@@ -41,14 +91,7 @@ def get_environments_by_repo(db: Session, repository_full_name: str) -> List[Env
 
 def get_active_environments(db: Session) -> List[Environment]:
     """Get all active environments"""
-    return db.query(Environment).filter(
-        Environment.status.in_([
-            EnvironmentStatus.PENDING,
-            EnvironmentStatus.PROVISIONING,
-            EnvironmentStatus.READY,
-            EnvironmentStatus.UPDATING
-        ])
-    ).all()
+    return db.query(Environment).filter(Environment.status.in_(ACTIVE_STATUSES)).all()
 
 
 def create_environment(

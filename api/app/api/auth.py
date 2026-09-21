@@ -11,7 +11,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, is_admin
 from app.config import get_settings
 from app.database import get_db
 from app.models import User
@@ -142,5 +142,6 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         "email": current_user.email,
         "avatar_url": current_user.avatar_url,
         "is_active": current_user.is_active,
+        "is_admin": is_admin(current_user),
         "created_at": current_user.created_at,
     }
