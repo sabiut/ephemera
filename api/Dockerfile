@@ -1,48 +1,42 @@
+# Build wheels with a compiler present, then copy only the installed packages
+# into a runtime image that has no build tools and no cloud CLIs. The app
+# talks to Kubernetes through the Python client with in-cluster config and
+# never shells out, so the AWS CLI, kubectl and the gcloud SDK the previous
+# image carried were dead weight that every node had to pull on every
+# rollout. This image is about 380 MB.
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
-    curl \
-    unzip \
-    && rm -rf /var/lib/apt/lists/*
+# libpq5 is the only runtime library psycopg2-binary does not bundle on all
+# platforms; it is small and avoids a hard-to-diagnose import failure.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 1000 app
 
-# Install AWS CLI
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
-    && unzip awscliv2.zip \
-    && ./aws/install \
-    && rm -rf aws awscliv2.zip
+COPY --from=builder /install /usr/local
+COPY --chown=app:app . .
 
-# Install kubectl
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
-    && chmod +x kubectl \
-    && mv kubectl /usr/local/bin/
+USER app
 
-# Install gke-gcloud-auth-plugin for GKE authentication
-RUN curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz \
-    && tar -xf google-cloud-cli-linux-x86_64.tar.gz -C /opt \
-    && /opt/google-cloud-sdk/install.sh --quiet --path-update=false --install-python=false \
-    && rm google-cloud-cli-linux-x86_64.tar.gz \
-    && /opt/google-cloud-sdk/bin/gcloud components install gke-gcloud-auth-plugin --quiet
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-ENV PATH="/opt/google-cloud-sdk/bin:${PATH}"
+EXPOSE 8000
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY . .
-
-# Copy entrypoint script and make it executable
-COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
-# Set entrypoint
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-
-# Run the application
+# The same image runs the API, the Celery worker and Celery beat; the
+# Kubernetes manifests override the command for the last two.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

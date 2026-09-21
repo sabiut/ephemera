@@ -141,9 +141,13 @@ spec:
           requests:
             memory: "256Mi"
             cpu: "100m"
+          # One API pod was killed with exit 137 on the first GKE rollout at a
+          # 512Mi limit, and startup under a 250m cap was slow enough to
+          # trip the rollout wait. Limits are not reserved, so raising them
+          # costs nothing while the pod is idle.
           limits:
-            memory: "512Mi"
-            cpu: "250m"
+            memory: "1Gi"
+            cpu: "500m"
         livenessProbe:
           httpGet:
             path: /health

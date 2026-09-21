@@ -228,25 +228,20 @@ jobs:
       run: |
         gcloud auth configure-docker us-central1-docker.pkg.dev
 
-    - name: Build and push API image
+    - name: Build and push images
       run: |
-        docker build -f api/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-api:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-api:latest ./api
-        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-api:${{ github.sha }}
-        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-api:latest
+        # One image serves the API, the Celery worker and Celery beat (the
+        # manifests override the command), so build it once and tag it three
+        # ways rather than building the same Dockerfile three times.
+        docker build -f api/Dockerfile -t ephemera-build ./api
+        for name in ephemera-api ephemera-celery-worker ephemera-celery-beat; do
+          docker tag ephemera-build ${{ env.ARTIFACT_REGISTRY }}/$name:${{ github.sha }}
+          docker tag ephemera-build ${{ env.ARTIFACT_REGISTRY }}/$name:latest
+          docker push ${{ env.ARTIFACT_REGISTRY }}/$name:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/$name:latest
+        done
+        docker image inspect ephemera-build --format 'Image size: {{.Size}} bytes' >> $GITHUB_STEP_SUMMARY
 
-    - name: Build and push Celery Worker image
-      run: |
-        docker build -f api/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:latest ./api
-        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:${{ github.sha }}
-        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:latest
-
-    - name: Build and push Celery Beat image
-      run: |
-        docker build -f api/Dockerfile -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:${{ github.sha }} -t ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:latest ./api
-        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:${{ github.sha }}
-        docker push ${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:latest
-
-    # ─── Get Terraform Outputs ───────────────────
     - name: Get infrastructure connection strings from Terraform
       run: |
         cd infrastructure/terraform/gcp
@@ -351,36 +346,40 @@ jobs:
         export LETSENCRYPT_EMAIL="${{ secrets.LETSENCRYPT_EMAIL }}"
         envsubst < infrastructure/k8s/letsencrypt-issuer.yaml.template | kubectl apply -f -
 
-        kubectl apply -f infrastructure/k8s/ephemera/api-deployment.yaml
-        kubectl apply -f infrastructure/k8s/ephemera/celery-worker-deployment.yaml
-        kubectl apply -f infrastructure/k8s/ephemera/celery-beat-deployment.yaml
+        # Substitute the commit-tagged image before applying so the pods roll
+        # exactly once. Applying ":latest" and then "set image" caused two
+        # back-to-back rollouts, each pulling a fresh image onto every node.
+        for f in api-deployment celery-worker-deployment celery-beat-deployment; do
+          sed "s|\(${{ env.ARTIFACT_REGISTRY }}/[a-z-]*\):latest|\1:${{ github.sha }}|" \
+            infrastructure/k8s/ephemera/$f.yaml | kubectl apply -f -
+        done
         kubectl apply -f infrastructure/k8s/ephemera/api-service.yaml
         kubectl apply -f infrastructure/k8s/ephemera/api-ingress.yaml
 
-    - name: Run database migrations
-      run: |
-        # Wait for pods to be ready before running migrations
-        kubectl wait --for=condition=ready pod -l component=api -n ephemera-system --timeout=120s || true
-        kubectl exec -n ephemera-system deployment/ephemera-api -- alembic upgrade head || echo "Migration failed or no pods running yet"
-
-    - name: Update deployment images
-      run: |
-        kubectl set image deployment/ephemera-api api=${{ env.ARTIFACT_REGISTRY }}/ephemera-api:${{ github.sha }} -n ephemera-system
-        kubectl set image deployment/ephemera-celery-worker celery-worker=${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-worker:${{ github.sha }} -n ephemera-system
-        kubectl set image deployment/ephemera-celery-beat celery-beat=${{ env.ARTIFACT_REGISTRY }}/ephemera-celery-beat:${{ github.sha }} -n ephemera-system
-
     - name: Wait for rollout to complete
       run: |
-        kubectl rollout status deployment/ephemera-api -n ephemera-system --timeout=5m || {
-          echo "Rollout failed! Checking pod status and logs..."
-          kubectl get pods -n ephemera-system
-          kubectl describe pods -n ephemera-system -l component=api
-          echo "=== Recent logs from failing pods ==="
-          kubectl logs -n ephemera-system -l component=api --tail=50 --all-containers=true || true
-          exit 1
-        }
-        kubectl rollout status deployment/ephemera-celery-worker -n ephemera-system --timeout=5m
-        kubectl rollout status deployment/ephemera-celery-beat -n ephemera-system --timeout=5m
+        # Small preemptible nodes pull the image and start Python slowly;
+        # five minutes was not enough even for a healthy rollout.
+        for d in ephemera-api ephemera-celery-worker ephemera-celery-beat; do
+          kubectl rollout status deployment/$d -n ephemera-system --timeout=10m || {
+            echo "Rollout of $d failed. Pod status, events and logs follow."
+            kubectl get pods -n ephemera-system -o wide
+            kubectl get events -n ephemera-system --sort-by=.lastTimestamp | tail -40
+            kubectl describe deployment/$d -n ephemera-system | tail -20
+            echo "=== Recent logs ==="
+            kubectl logs -n ephemera-system deployment/$d --tail=50 --all-containers=true || true
+            exit 1
+          }
+        done
+
+    - name: Run database migrations
+      run: |
+        # Runs after the rollout so a Ready pod is guaranteed. On the first
+        # GKE deployment the old version of this step waited two minutes for
+        # a pod, gave up, and hid the failure behind "|| echo", leaving the
+        # database with no tables and every login a 500.
+        kubectl exec -n ephemera-system deployment/ephemera-api -- alembic upgrade head
+        kubectl exec -n ephemera-system deployment/ephemera-api -- alembic current
 
     - name: Verify deployment
       run: |
