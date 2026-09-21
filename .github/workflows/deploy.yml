@@ -356,12 +356,6 @@ jobs:
         kubectl apply -f infrastructure/k8s/ephemera/api-service.yaml
         kubectl apply -f infrastructure/k8s/ephemera/api-ingress.yaml
 
-    - name: Run database migrations
-      run: |
-        # Wait for pods to be ready before running migrations
-        kubectl wait --for=condition=ready pod -l component=api -n ephemera-system --timeout=120s || true
-        kubectl exec -n ephemera-system deployment/ephemera-api -- alembic upgrade head || echo "Migration failed or no pods running yet"
-
     - name: Wait for rollout to complete
       run: |
         # Small preemptible nodes pull the image and start Python slowly;
@@ -377,6 +371,15 @@ jobs:
             exit 1
           }
         done
+
+    - name: Run database migrations
+      run: |
+        # Runs after the rollout so a Ready pod is guaranteed. On the first
+        # GKE deployment the old version of this step waited two minutes for
+        # a pod, gave up, and hid the failure behind "|| echo", leaving the
+        # database with no tables and every login a 500.
+        kubectl exec -n ephemera-system deployment/ephemera-api -- alembic upgrade head
+        kubectl exec -n ephemera-system deployment/ephemera-api -- alembic current
 
     - name: Verify deployment
       run: |
