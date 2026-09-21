@@ -5,16 +5,27 @@ from app.models.environment import EnvironmentStatus
 
 
 class EnvironmentCreate(BaseModel):
-    """Schema for creating a new environment via API"""
+    """
+    Request body for creating a preview environment via the API.
+
+    Only the repository and PR number are required. The server looks the PR
+    up through the GitHub App and takes the installation, the PR author (who
+    becomes the owner) and, unless supplied, the title, branch and head
+    commit from GitHub rather than from the caller.
+
+    ``installation_id``, ``user_id``, ``user_login`` and ``user_avatar_url``
+    are accepted for backwards compatibility. The installation id must match
+    the one GitHub reports for the repository; the user fields are ignored.
+    """
     repository_full_name: str
-    repository_name: str
     pr_number: int
-    pr_title: str
-    branch_name: str
-    commit_sha: str
-    installation_id: int
-    user_id: int
-    user_login: str
+    repository_name: Optional[str] = None
+    pr_title: Optional[str] = None
+    branch_name: Optional[str] = None
+    commit_sha: Optional[str] = None
+    installation_id: Optional[int] = None
+    user_id: Optional[int] = None
+    user_login: Optional[str] = None
     user_avatar_url: Optional[str] = None
 
 

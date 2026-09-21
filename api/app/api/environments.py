@@ -10,6 +10,7 @@ from app.crud import user as user_crud
 from app.database import get_db
 from app.models import User
 from app.schemas.environment import EnvironmentCreate, EnvironmentResponse
+from app.services.github import GitHubUnavailable, github_service
 from app.services.provisioning import EnvironmentRequest, request_environment
 
 logger = logging.getLogger(__name__)
@@ -84,31 +85,68 @@ async def create_environment(
 
     Called by GitHub Actions workflows with a Bearer token. If a live
     environment already exists for the PR it is returned unchanged.
+
+    Nothing about the repository is taken on trust from the caller. The
+    installation is the one GitHub reports for the repository, the PR must
+    exist there, its author becomes the owner, and the caller must be an
+    admin, the PR author, or a collaborator on the repository.
     """
-    logger.info(
-        f"{current_user.github_login} requested environment for "
-        f"PR #{env_data.pr_number} in {env_data.repository_full_name}"
-    )
+    repo = env_data.repository_full_name
+    logger.info(f"{current_user.github_login} requested environment for PR #{env_data.pr_number} in {repo}")
+
+    try:
+        installation_id = github_service.get_repo_installation_id(repo)
+        if installation_id is None:
+            raise HTTPException(status_code=404, detail=f"The Ephemera GitHub App is not installed on {repo}")
+        if env_data.installation_id is not None and env_data.installation_id != installation_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"installation_id {env_data.installation_id} does not own {repo}",
+            )
+
+        pr = github_service.get_pull_request(installation_id, repo, env_data.pr_number)
+        if pr is None:
+            raise HTTPException(status_code=404, detail=f"Pull request #{env_data.pr_number} not found in {repo}")
+
+        if not _may_provision(installation_id, repo, current_user, pr.author_id):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"{current_user.github_login} is not a collaborator on {repo}. Only the PR author, "
+                    "a repository collaborator, or an admin (ADMIN_GITHUB_LOGINS) can create its environments."
+                ),
+            )
+    except GitHubUnavailable:
+        raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
 
     owner = user_crud.get_or_create_user(
         db=db,
-        github_id=env_data.user_id,
-        github_login=env_data.user_login,
-        avatar_url=env_data.user_avatar_url,
+        github_id=pr.author_id,
+        github_login=pr.author_login,
+        avatar_url=pr.author_avatar_url,
     )
 
     environment, action = request_environment(
         db,
         EnvironmentRequest(
-            repository_full_name=env_data.repository_full_name,
-            repository_name=env_data.repository_name,
-            pr_number=env_data.pr_number,
-            pr_title=env_data.pr_title,
-            branch_name=env_data.branch_name,
-            commit_sha=env_data.commit_sha,
-            installation_id=env_data.installation_id,
+            repository_full_name=repo,
+            repository_name=env_data.repository_name or repo.rpartition("/")[2],
+            pr_number=pr.number,
+            pr_title=env_data.pr_title or pr.title,
+            branch_name=env_data.branch_name or pr.head_ref,
+            commit_sha=env_data.commit_sha or pr.head_sha,
+            installation_id=installation_id,
             owner=owner,
         ),
     )
     logger.info(f"Environment {environment.namespace}: {action}")
     return environment
+
+
+def _may_provision(installation_id: int, repo: str, caller: User, pr_author_id: int) -> bool:
+    """Admins, the PR author, and repository collaborators may provision."""
+    if is_admin(caller) or caller.github_id == pr_author_id:
+        return True
+    # None means the check itself failed (for example the App lacks the
+    # Metadata permission). Fail closed: an unverifiable caller is denied.
+    return github_service.is_collaborator(installation_id, repo, caller.github_login) is True

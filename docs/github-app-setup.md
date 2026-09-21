@@ -23,7 +23,7 @@
    - **Contents**: Read-only (to read PR code)
    - **Pull requests**: Read & write (to comment on PRs)
    - **Deployments**: Read & write (optional, for deployment status)
-   - **Metadata**: Read-only (repository metadata)
+   - **Metadata**: Read-only (repository metadata; also used to check whether an API caller is a collaborator before it may create environments for a repository)
 
 5. **Subscribe to events** (what triggers webhooks):
    -  Pull request
