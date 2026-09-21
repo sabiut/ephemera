@@ -2,19 +2,19 @@
 Authentication endpoints for GitHub OAuth
 """
 
-import html
 import logging
 import secrets
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user, is_admin
+from app.api.dependencies import SESSION_COOKIE, get_current_token, get_current_user, is_admin
 from app.config import get_settings
 from app.database import get_db
-from app.models import User
+from app.models import APIToken, User
 from app.services.auth import GitHubOAuthService, get_github_oauth_service
 
 logger = logging.getLogger(__name__)
@@ -83,53 +83,41 @@ async def github_callback(
 
     logger.info(f"User {user.github_login} authenticated successfully")
 
-    html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Login Successful</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            display: flex; justify-content: center; align-items: center;
-            height: 100vh; margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }}
-        .container {{
-            background: white; padding: 40px; border-radius: 10px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center;
-        }}
-        h1 {{ color: #333; margin-bottom: 10px; }}
-        p {{ color: #666; margin-bottom: 20px; }}
-        .spinner {{
-            border: 3px solid #f3f3f3; border-top: 3px solid #667eea; border-radius: 50%;
-            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto;
-        }}
-        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>&#10003; Login Successful</h1>
-        <p>Welcome, {html.escape(str(github_user['login']))}!</p>
-        <div class="spinner"></div>
-        <p>Redirecting to dashboard...</p>
-    </div>
-    <script>
-        localStorage.setItem('ephemera_token', {_js_string(session_token)});
-        setTimeout(() => {{ window.location.href = '/dashboard'; }}, 1500);
-    </script>
-</body>
-</html>
-"""
-    response = HTMLResponse(content=html_content)
+    # The session lives in an HttpOnly cookie. Page scripts cannot read it,
+    # so a cross-site scripting bug in the dashboard cannot steal the session
+    # the way it could when the token sat in localStorage.
+    settings = get_settings()
+    response = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_token,
+        max_age=settings.session_token_ttl_days * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=settings.environment != "development",
+        path="/",
+    )
     response.delete_cookie(STATE_COOKIE)
     return response
 
 
-def _js_string(value: str) -> str:
-    """Serialize a string as a JavaScript literal safe for inline <script>."""
-    import json
-    return json.dumps(value).replace("<", "\\u003c")
+@router.post("/logout")
+async def logout(
+    response: Response,
+    token: APIToken = Depends(get_current_token),
+    db: Session = Depends(get_db),
+):
+    """
+    End the dashboard session: revoke the session token and clear the cookie.
+
+    API tokens are not revoked here; use the tokens API for those.
+    """
+    if token.token_type == APIToken.TYPE_SESSION:
+        token.is_active = False
+        token.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
 
 
 @router.get("/me")
