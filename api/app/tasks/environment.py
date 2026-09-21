@@ -78,7 +78,9 @@ def _run_deployment(
     if result.get("ai_generated"):
         logger.info("Deployment used AI-generated manifests")
     elif result.get("ai_fallback_reason"):
-        logger.info(f"AI fallback: {result['ai_fallback_reason']}")
+        # The full reason (provider error, request id, billing text) stays
+        # here in the logs; the PR comment only says that the fallback ran.
+        logger.warning(f"AI manifest generation unavailable, used the compose converter: {result['ai_fallback_reason']}")
 
     if latest:
         # A repository without a compose file is not a failed deployment; the
@@ -120,9 +122,9 @@ def _deployment_summary(result: Dict[str, Any]) -> str:
     if result.get("ai_generated") and result.get("ai_plan"):
         lines.append(f"\n<details>\n<summary>AI Deployment Plan</summary>\n\n{result['ai_plan']}\n</details>\n")
     elif result.get("ai_fallback_reason") and result["ai_fallback_reason"] != "AI deployment disabled":
-        lines.append(
-            f"\n> **Note**: AI deployment unavailable ({result['ai_fallback_reason']}). Used deterministic converter.\n"
-        )
+        # Deliberately no detail: the reason is a raw provider error and this
+        # comment is public. It is logged by _run_deployment instead.
+        lines.append("\n> **Note**: AI manifest generation unavailable, used the compose converter.\n")
 
     return "\n".join(lines)
 
