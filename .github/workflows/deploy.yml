@@ -97,6 +97,33 @@ jobs:
         cd infrastructure/terraform/gcp
         terraform state rm module.kubernetes_secrets 2>/dev/null || true
 
+    - name: Remove load balancers Kubernetes created
+      run: |
+        # Services of type LoadBalancer (the nginx ingress controller) create
+        # GCP forwarding rules, target pools and firewall rules that deleting
+        # the cluster does not remove. Left behind they keep billing and can
+        # block the VPC deletion, so they go first, and we wait for GCP to
+        # release the forwarding rules before Terraform starts.
+        if ! gcloud container clusters get-credentials "${{ env.GKE_CLUSTER }}" \
+            --region "${{ env.GKE_REGION }}" --project "${{ env.GCP_PROJECT_ID }}" 2>/dev/null; then
+          echo "Cluster not reachable; nothing to clean up in Kubernetes."
+          exit 0
+        fi
+        kubectl get svc -A -o json \
+          | jq -r '.items[] | select(.spec.type == "LoadBalancer") | "\(.metadata.namespace) \(.metadata.name)"' \
+          | while read -r ns name; do
+              echo "Deleting LoadBalancer service $ns/$name"
+              kubectl delete svc -n "$ns" "$name" --timeout=3m || true
+            done
+        for i in $(seq 1 30); do
+          remaining=$(gcloud compute forwarding-rules list --project "${{ env.GCP_PROJECT_ID }}" \
+            --filter="region:(${{ env.GKE_REGION }})" --format='value(name)' | wc -l)
+          [ "$remaining" -eq 0 ] && break
+          echo "Waiting for $remaining forwarding rule(s) to be released..."
+          sleep 10
+        done
+        gcloud compute forwarding-rules list --project "${{ env.GCP_PROJECT_ID }}" --format='table(name,region,IPAddress)'
+
     - name: Terraform Destroy
       run: |
         cd infrastructure/terraform/gcp
