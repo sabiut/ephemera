@@ -99,4 +99,8 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_users_github_login'), table_name='users')
     op.drop_index(op.f('ix_users_github_id'), table_name='users')
     op.drop_table('users')
+    # Dropping the tables does not drop the PostgreSQL enum types they used;
+    # without this a later upgrade fails with "type already exists".
+    sa.Enum(name='deploymentstatus').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='environmentstatus').drop(op.get_bind(), checkfirst=True)
     # ### end Alembic commands ###
