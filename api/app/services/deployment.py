@@ -9,6 +9,7 @@ This service handles:
 """
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
@@ -63,6 +64,60 @@ def parse_port(port: Any) -> Optional[Tuple[int, int]]:
 def service_hostname(namespace: str, service_name: str, base_domain: str) -> str:
     """Public hostname for a service: {namespace}-{service}.{base_domain}."""
     return f"{namespace}-{service_name}.{base_domain}"
+
+
+# Service names that usually mean "the thing a reviewer opens", in order.
+PRIMARY_SERVICE_PREFERENCE = ("web", "frontend", "front", "ui", "app", "site", "www", "api")
+
+
+def choose_primary_url(services: List[str], service_urls: Dict[str, str]) -> Optional[str]:
+    """
+    The one link to show a reviewer. Prefers conventional front-end names,
+    then falls back to the first deployed service that has a URL.
+    """
+    for candidate in PRIMARY_SERVICE_PREFERENCE:
+        if candidate in service_urls:
+            return service_urls[candidate]
+    for name in services:
+        if name in service_urls:
+            return service_urls[name]
+    return next(iter(service_urls.values()), None)
+
+
+def probe_urls(
+    urls: Dict[str, str],
+    timeout_seconds: int = 300,
+    poll_seconds: float = 5.0,
+) -> Dict[str, str]:
+    """
+    Wait until every public URL answers over HTTPS, or the timeout passes.
+
+    Any HTTP status below 500 counts as reachable: the application may well
+    return 404 on "/" and still be working. TLS errors are expected for the
+    first minute while cert-manager issues the certificate, so they are
+    retried rather than treated as failures.
+
+    Returns {service: reason} for URLs that never answered.
+    """
+    import httpx  # local import: keeps this module importable without network deps in tests
+
+    pending = dict(urls)
+    last_reason: Dict[str, str] = {}
+    deadline = time.monotonic() + timeout_seconds
+    while pending and time.monotonic() < deadline:
+        for service, url in list(pending.items()):
+            try:
+                response = httpx.get(url, timeout=10.0, follow_redirects=True)
+            except Exception as e:  # connection, TLS, DNS
+                last_reason[service] = f"{type(e).__name__}: {e}"[:200]
+                continue
+            if response.status_code < 500:
+                pending.pop(service, None)
+            else:
+                last_reason[service] = f"HTTP {response.status_code}"
+        if pending:
+            time.sleep(poll_seconds)
+    return {service: last_reason.get(service, "no response") for service in pending}
 
 
 class DeploymentService:

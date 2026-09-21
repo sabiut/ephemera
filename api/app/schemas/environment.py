@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 from app.models.environment import EnvironmentStatus
 
 
@@ -39,6 +39,7 @@ class EnvironmentResponse(BaseModel):
     commit_sha: str
     namespace: str
     environment_url: Optional[str]
+    service_urls: Optional[Dict[str, str]] = None
     status: EnvironmentStatus
     installation_id: int
     owner_id: int

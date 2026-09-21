@@ -77,7 +77,7 @@ When a PR is opened on GitHub:
 6. Create deployment record
 7. Post comment to PR with environment URL
 8. Update commit status to "pending"
-9. [TODO] Queue Celery task for actual provisioning
+9. Queue the Celery provisioning task (`api/app/tasks/environment.py`)
 ```
 
 **Environment URL Format:**
@@ -223,8 +223,8 @@ ephemera/
 │   │   └── core/             # Security, config
 │   ├── Dockerfile
 │   └── requirements.txt
-├── worker/                   # Celery workers (TODO)
-├── infrastructure/           # Terraform/K8s (TODO)
+├── worker/                   # Celery entrypoint; the tasks live in api/app/tasks/
+├── infrastructure/           # Terraform (GCP, AWS) and Kubernetes manifests
 ├── scripts/                  # Helper scripts
 ├── docs/                     # Documentation
 └── docker-compose.yml

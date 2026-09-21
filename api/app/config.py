@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # dashboard. Everyone else sees only environments for their own PRs.
     admin_github_logins: str = ""
 
+    # How long a preview may take to become ready (pods ready, then public
+    # URLs answering) before it is reported as failed.
+    preview_ready_timeout_seconds: int = 300
+
     # Preview namespace quotas
     preview_cpu_quota: str = "1"
     preview_memory_quota: str = "2Gi"

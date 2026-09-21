@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum as SQLEnum, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum as SQLEnum, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -35,7 +35,8 @@ class Environment(Base):
 
     # Environment Details
     namespace = Column(String, unique=True, index=True, nullable=False) # K8s namespace
-    environment_url = Column(String, nullable=True)                     # Public URL
+    environment_url = Column(String, nullable=True)                     # Primary public URL (what a reviewer opens)
+    service_urls = Column(JSON, nullable=True)                          # {service: url} for every exposed service
     status = Column(SQLEnum(EnvironmentStatus), default=EnvironmentStatus.PENDING, index=True)
 
     # GitHub App Integration

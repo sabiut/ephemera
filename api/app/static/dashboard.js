@@ -115,6 +115,7 @@ window.addEventListener('hashchange', navigate);
 // ─── Data Loading ───────────────────────────────────────
 
 let cachedEnvironments = [];
+let environmentsError = null;
 let cachedCredentials = [];
 let cachedTokens = [];
 let refreshInterval = null;
@@ -156,9 +157,12 @@ function startAutoRefresh() {
 async function loadEnvironments() {
     try {
         cachedEnvironments = await apiCall('/api/v1/environments/') || [];
+        environmentsError = null;
     } catch (e) {
+        // Keep whatever we last had and say the refresh failed, instead of
+        // showing an empty list that looks like "you have no environments".
         console.error('Failed to load environments:', e);
-        cachedEnvironments = [];
+        environmentsError = e.message || 'Request failed';
     }
 }
 
@@ -217,7 +221,38 @@ function timeAgo(dateStr) {
     return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+function envErrorHTML(env) {
+    if ((env.status || '').toLowerCase() !== 'failed' || !env.error_message) return '';
+    const full = env.error_message;
+    const short = full.length > 140 ? full.slice(0, 140) + '…' : full;
+    return `<div class="text-muted text-sm" title="${escapeHtml(full)}" style="margin-top:4px;max-width:420px;">${escapeHtml(short)}</div>`;
+}
+
+function envPreviewHTML(env) {
+    const status = (env.status || '').toLowerCase();
+    const urls = env.service_urls || {};
+    const names = Object.keys(urls);
+    if (status !== 'ready' || (!env.environment_url && names.length === 0)) {
+        return '<span class="text-muted">-</span>';
+    }
+    const primary = env.environment_url || urls[names[0]];
+    const others = names.filter(n => urls[n] !== primary);
+    const extra = others.length
+        ? `<div class="text-sm" style="margin-top:4px;">${others.map(n =>
+            `<a href="${escapeHtml(urls[n])}" target="_blank" class="text-muted">${escapeHtml(n)}</a>`).join(' · ')}</div>`
+        : '';
+    return `<a href="${escapeHtml(primary)}" target="_blank" style="color: #6366f1;">Open preview</a>${extra}`;
+}
+
 function envTableHTML(envs) {
+    if (environmentsError) {
+        return `
+            <div class="empty-state">
+                <p><strong>Could not load environments.</strong> ${escapeHtml(environmentsError)}</p>
+                <p class="text-muted text-sm">This list may be stale. It refreshes automatically; reload the page if it persists.</p>
+            </div>
+        `;
+    }
     if (!envs || envs.length === 0) {
         return `
             <div class="empty-state">
@@ -239,7 +274,8 @@ function envTableHTML(envs) {
                     <th>PR</th>
                     <th>Branch</th>
                     <th>Status</th>
-                    <th>URL</th>
+                    <th>Preview</th>
+                    <th>Commit</th>
                     <th>Created</th>
                 </tr>
             </thead>
@@ -249,10 +285,9 @@ function envTableHTML(envs) {
                         <td class="mono">${escapeHtml(env.repository_full_name || '-')}</td>
                         <td>#${env.pr_number || '-'}</td>
                         <td class="mono text-muted">${escapeHtml(env.branch_name || '-')}</td>
-                        <td>${statusBadge(env.status)}</td>
-                        <td>${env.environment_url
-                            ? `<a href="${escapeHtml(env.environment_url)}" target="_blank" style="color: #6366f1;">${escapeHtml(env.environment_url)}</a>`
-                            : '<span class="text-muted">-</span>'}</td>
+                        <td>${statusBadge(env.status)}${envErrorHTML(env)}</td>
+                        <td>${envPreviewHTML(env)}</td>
+                        <td class="mono text-muted text-sm">${escapeHtml((env.commit_sha || '').slice(0, 8) || '-')}</td>
                         <td class="text-muted text-sm">${timeAgo(env.created_at)}</td>
                     </tr>
                 `).join('')}
