@@ -24,6 +24,7 @@ from app.services import ai_deployment_service
 from app.services.deployment import deployment_service
 from app.services.github import github_service
 from app.services.kubernetes import kubernetes_service
+from app.services.deployment import choose_primary_url, probe_urls
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +83,56 @@ def _run_deployment(
         # here in the logs; the PR comment only says that the fallback ran.
         logger.warning(f"AI manifest generation unavailable, used the compose converter: {result['ai_fallback_reason']}")
 
+    # "Ready" has to mean a reviewer can open the preview. Applying manifests
+    # is not that, so each of these turns an apparent success into a failure
+    # with a reason a developer can act on.
+    if result.get("success"):
+        services = result.get("services") or []
+        if not result.get("compose_found", True):
+            result["success"] = False
+            result["error"] = "No docker-compose.yml in the repository, so there is nothing to preview"
+        elif not services:
+            skipped = result.get("skipped_services") or []
+            detail = (
+                f"every service is build-only ({', '.join(skipped)}); Ephemera deploys images, "
+                "so the repository's CI must publish an image and the compose file must reference it"
+                if skipped else "the compose file defines no deployable services"
+            )
+            result["success"] = False
+            result["error"] = f"Nothing was deployed: {detail}"
+        else:
+            ready, problems = kubernetes_service.wait_for_deployments_ready(
+                namespace, services, timeout_seconds=settings.preview_ready_timeout_seconds
+            )
+            if problems:
+                result["success"] = False
+                result["error"] = "Services did not become ready: " + "; ".join(
+                    f"{name} ({reason})" for name, reason in problems.items()
+                )
+            else:
+                unreachable = probe_urls(
+                    result.get("service_urls") or {},
+                    timeout_seconds=settings.preview_ready_timeout_seconds,
+                )
+                if unreachable:
+                    result["success"] = False
+                    result["error"] = "Preview URLs did not answer: " + "; ".join(
+                        f"{name} ({reason})" for name, reason in unreachable.items()
+                    )
+
+    if not result.get("success") and not result.get("error"):
+        result["error"] = "Application deployment failed without a reported reason"
+
+    if result.get("success"):
+        environment = environment_crud.get_environment(db, environment_id)
+        urls = result.get("service_urls") or {}
+        primary = choose_primary_url(result.get("services") or [], urls)
+        result["primary_url"] = primary
+        if environment:
+            environment_crud.record_service_urls(db, environment, urls, primary)
+
     if latest:
-        # A repository without a compose file is not a failed deployment; the
-        # namespace exists and nothing was asked of us.
-        ok = result.get("success") or not result.get("compose_found", True)
+        ok = bool(result.get("success"))
         deployment_crud.update_deployment_status(
             db=db,
             deployment=latest,
@@ -100,12 +147,11 @@ def _run_deployment(
 
 def _deployment_summary(result: Dict[str, Any]) -> str:
     """Markdown block describing what was deployed, for PR comments."""
-    if not result.get("compose_found", True):
-        return "\n> **Note**: No docker-compose.yml found. Namespace created but no application deployed.\n"
-
     lines = []
     services = result.get("services", [])
     urls = result.get("service_urls", {})
+    if result.get("primary_url"):
+        lines.append(f"\n**Open preview**: {result['primary_url']}")
     if services:
         lines.append("\n**Deployed Services**:")
         for service in services:
@@ -205,13 +251,13 @@ def provision_environment(
             self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha
         )
 
-        if result.get("compose_found", True) and not result.get("success"):
+        if not result.get("success"):
             raise RuntimeError(result.get("error") or "Application deployment failed")
 
         environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.READY)
         logger.info(f"Environment {environment_id} provisioned successfully")
 
-        env_url = next(iter(result.get("service_urls", {}).values()), environment.environment_url)
+        env_url = result.get("primary_url") or environment.environment_url
         comment = f"""## Ephemera Environment Ready
 
 Your preview environment has been created!
@@ -241,7 +287,7 @@ Failed to create preview environment.
 **Status**: Failed
 **Error**: {e}
 
-Push a new commit to retry, or check the Ephemera logs.{FOOTER}"""
+Fix the cause and push a new commit; Ephemera will try again from scratch.{FOOTER}"""
         _notify(installation_id, repo_full_name, pr_number, commit_sha,
                 "failure", "Failed to create environment", comment)
         return {"success": False, "environment_id": environment_id, "error": str(e)}
@@ -327,13 +373,13 @@ def update_environment(
         result = _run_deployment(
             self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha
         )
-        if result.get("compose_found", True) and not result.get("success"):
+        if not result.get("success"):
             raise RuntimeError(result.get("error") or "Application deployment failed")
 
         environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.READY)
         logger.info(f"Environment {environment_id} redeployed at {commit_sha[:8]}")
 
-        env_url = next(iter(result.get("service_urls", {}).values()), environment.environment_url)
+        env_url = result.get("primary_url") or environment.environment_url
         comment = f"""## Ephemera Environment Updated
 
 Redeployed at `{commit_sha[:8]}`.
@@ -360,7 +406,9 @@ Redeployed at `{commit_sha[:8]}`.
 Could not redeploy at `{commit_sha[:8]}`.
 
 **Namespace**: `{environment.namespace}`
-**Error**: {e}{FOOTER}"""
+**Error**: {e}
+
+Fix the cause and push a new commit; Ephemera will try again from scratch.{FOOTER}"""
         _notify(installation_id, repo_full_name, pr_number, commit_sha,
                 "failure", "Failed to update environment", comment)
         return {"success": False, "environment_id": environment_id, "error": str(e)}

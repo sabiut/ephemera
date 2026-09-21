@@ -143,12 +143,24 @@ def handle_pull_request_synchronize(payload: PullRequestWebhook):
 
     with SessionLocal() as db:
         environment = environment_crud.get_environment_by_pr(db, repo.full_name, pr.number)
-        if not environment:
-            logger.warning(f"No environment found for PR #{pr.number}, cannot update")
-            return
-        if not environment.is_active:
-            logger.info(f"Environment {environment.namespace} is {environment.status.value}; not updating")
-            return
+        if not environment or environment.status == EnvironmentStatus.FAILED:
+            # No record, or the last attempt failed: the failure comment tells
+            # the developer to push a new commit, so a push must start over
+            # rather than be ignored. The opened handler resets and re-provisions.
+            logger.info(f"PR #{pr.number} has no live environment; provisioning from scratch")
+            provision_from_scratch = True
+        else:
+            provision_from_scratch = False
+            if not environment.is_active:
+                logger.info(f"Environment {environment.namespace} is {environment.status.value}; not updating")
+                return
+
+    if provision_from_scratch:
+        handle_pull_request_opened(payload)
+        return
+
+    with SessionLocal() as db:
+        environment = environment_crud.get_environment_by_pr(db, repo.full_name, pr.number)
 
         environment_crud.update_environment_commit(db, environment, commit_sha)
         deployment = deployment_crud.create_deployment(db, environment, commit_sha)

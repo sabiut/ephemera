@@ -7,7 +7,8 @@ This service handles:
 """
 
 import logging
-from typing import Dict, Optional
+import time
+from typing import Dict, List, Optional, Tuple
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -186,6 +187,83 @@ class KubernetesService:
                 return True
             logger.error(f"Failed to create resource quota: {e}")
             return False
+
+    def wait_for_deployments_ready(
+        self,
+        namespace: str,
+        names: List[str],
+        timeout_seconds: int = 300,
+        poll_seconds: float = 5.0,
+    ) -> Tuple[List[str], Dict[str, str]]:
+        """
+        Block until every named Deployment has all its replicas ready, or the
+        timeout passes.
+
+        Returns (ready_names, problems) where problems maps a Deployment that
+        never became ready to the most useful reason available: a waiting
+        container's reason and message (ImagePullBackOff, CrashLoopBackOff...),
+        a failed-scheduling event, or the plain replica count.
+        """
+        if not self.enabled:
+            logger.warning("Kubernetes is disabled; cannot wait for deployments")
+            return [], {name: "Kubernetes is disabled" for name in names}
+
+        pending = set(names)
+        ready: List[str] = []
+        deadline = time.monotonic() + timeout_seconds
+        while pending and time.monotonic() < deadline:
+            for name in sorted(pending):
+                try:
+                    dep = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+                except ApiException as e:
+                    if e.status == 404:
+                        continue
+                    raise
+                wanted = dep.spec.replicas or 1
+                have = dep.status.ready_replicas or 0
+                # updated_replicas guards against counting old pods during a rollout
+                updated = dep.status.updated_replicas or 0
+                if have >= wanted and updated >= wanted:
+                    ready.append(name)
+                    pending.discard(name)
+            if pending:
+                time.sleep(poll_seconds)
+
+        problems = {name: self._deployment_problem(namespace, name) for name in sorted(pending)}
+        return ready, problems
+
+    def _deployment_problem(self, namespace: str, name: str) -> str:
+        """Best-effort explanation of why a Deployment's pods are not ready."""
+        try:
+            pods = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=f"service={name}")
+        except ApiException as e:
+            return f"could not inspect pods ({e.status})"
+        if not pods.items:
+            try:
+                dep = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+            except ApiException:
+                return "deployment not found"
+            for cond in dep.status.conditions or []:
+                if cond.type == "ReplicaFailure" or (cond.type == "Progressing" and cond.status == "False"):
+                    return f"{cond.reason}: {cond.message}"
+            return "no pods were created"
+        for pod in pods.items:
+            for cs in (pod.status.container_statuses or []) + (pod.status.init_container_statuses or []):
+                waiting = cs.state.waiting if cs.state else None
+                if waiting and waiting.reason not in (None, "ContainerCreating", "PodInitializing"):
+                    msg = (waiting.message or "").strip().split("\n")[0]
+                    return f"{waiting.reason}: {msg}" if msg else waiting.reason
+                terminated = cs.state.terminated if cs.state else None
+                if terminated and terminated.exit_code not in (None, 0):
+                    return f"container exited with code {terminated.exit_code} ({terminated.reason or 'Error'})"
+            if pod.status.phase == "Pending":
+                for cond in pod.status.conditions or []:
+                    if cond.type == "PodScheduled" and cond.status == "False":
+                        return f"{cond.reason}: {cond.message}"
+                return "pod is still Pending (image pull or scheduling)"
+            if pod.status.phase == "Running":
+                return "pod is Running but its readiness probe has not passed"
+        return "pods did not become ready in time"
 
     def get_namespace_status(self, namespace: str) -> Optional[str]:
         """Return the namespace phase (Active/Terminating) or None if unknown."""

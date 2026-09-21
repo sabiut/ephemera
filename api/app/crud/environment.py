@@ -173,6 +173,21 @@ def reset_environment(
     return environment
 
 
+def record_service_urls(
+    db: Session,
+    environment: Environment,
+    service_urls: dict,
+    primary_url: Optional[str],
+) -> Environment:
+    """Store the real per-service URLs and the one a reviewer should open."""
+    environment.service_urls = dict(service_urls)
+    if primary_url:
+        environment.environment_url = primary_url
+    db.commit()
+    db.refresh(environment)
+    return environment
+
+
 def update_environment_commit(
     db: Session,
     environment: Environment,
