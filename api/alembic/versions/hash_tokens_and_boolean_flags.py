@@ -27,16 +27,20 @@ def upgrade():
     op.create_index('ix_api_tokens_token_hash', 'api_tokens', ['token_hash'], unique=True)
 
     # --- is_active: integer -> boolean ---
+    # PostgreSQL will not change a column's type while it carries a default of
+    # the old type ("default for column cannot be cast automatically"), so the
+    # integer default is dropped first and the boolean default set afterwards.
     for table in ('api_tokens', 'cloud_credentials'):
         op.execute(f"UPDATE {table} SET is_active = 1 WHERE is_active IS NULL")
+        op.alter_column(table, 'is_active', existing_type=sa.Integer(), server_default=None)
         op.alter_column(
             table, 'is_active',
             type_=sa.Boolean(),
             existing_type=sa.Integer(),
             nullable=False,
-            server_default=sa.text('true'),
             postgresql_using='is_active <> 0',
         )
+        op.alter_column(table, 'is_active', existing_type=sa.Boolean(), server_default=sa.text('true'))
 
     # --- one environment per (repository, PR) ---
     op.create_unique_constraint('uq_environments_repo_pr', 'environments', ['repository_full_name', 'pr_number'])
@@ -46,14 +50,15 @@ def downgrade():
     op.drop_constraint('uq_environments_repo_pr', 'environments', type_='unique')
 
     for table in ('api_tokens', 'cloud_credentials'):
+        op.alter_column(table, 'is_active', existing_type=sa.Boolean(), server_default=None)
         op.alter_column(
             table, 'is_active',
             type_=sa.Integer(),
             existing_type=sa.Boolean(),
             nullable=True,
-            server_default='1',
             postgresql_using='CASE WHEN is_active THEN 1 ELSE 0 END',
         )
+        op.alter_column(table, 'is_active', existing_type=sa.Integer(), server_default='1')
 
     # Hashes cannot be reversed; existing tokens become unusable after downgrade.
     op.drop_index('ix_api_tokens_token_hash', table_name='api_tokens')
