@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from kubernetes.client.rest import ApiException
 
+from app.services.compose import commit_variables, image_report, interpolate
+
 logger = logging.getLogger(__name__)
 
 COMPOSE_FILENAMES = (
@@ -473,7 +475,16 @@ class DeploymentService:
                     "service_urls": {},
                 }
 
-            compose = self.parse_docker_compose(compose_content)
+            interpolated = interpolate(compose_content, commit_variables(ref))
+            if interpolated.errors:
+                return {
+                    "success": False,
+                    "compose_found": True,
+                    "error": "docker-compose.yml requires variables that are not set: " + "; ".join(interpolated.errors),
+                    "services": [],
+                    "service_urls": {},
+                }
+            compose = self.parse_docker_compose(interpolated.text)
             if not compose:
                 return {
                     "success": False,
@@ -491,6 +502,7 @@ class DeploymentService:
 
             applied_count, failed, service_urls = self.apply_manifests(manifests, revision=ref)
 
+            report = image_report(compose, ref)
             result: Dict[str, Any] = {
                 "success": not failed,
                 "compose_found": True,
@@ -498,6 +510,9 @@ class DeploymentService:
                 "services": deployed_services,
                 "skipped_services": skipped,
                 "service_urls": service_urls,
+                "images": report.images,
+                "unpinned_builds": report.unpinned_builds,
+                "unset_variables": interpolated.unset,
                 "error": f"Failed to apply manifests: {', '.join(failed)}" if failed else None,
             }
             if failed:

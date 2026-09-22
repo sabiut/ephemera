@@ -53,14 +53,20 @@ def test_probe_accepts_any_non_5xx_and_reports_the_rest(monkeypatch):
 
 # ----------------------------------------------------------------- readiness wait
 
-def _k8s(deployments, pods=None):
+def _k8s(deployments, pods=None, selector=None):
+    """Fake KubernetesService. pods may be a list or a callable returning one."""
     svc = KubernetesService.__new__(KubernetesService)
     svc.enabled = True
+    svc.deleted = []
+    svc.selectors = []
 
     def read(name, namespace):
         dep = deployments[name]
         return SimpleNamespace(
-            spec=SimpleNamespace(replicas=dep.get("replicas", 1)),
+            spec=SimpleNamespace(
+                replicas=dep.get("replicas", 1),
+                selector=SimpleNamespace(match_labels=selector or {"app": "app", "service": name}),
+            ),
             status=SimpleNamespace(
                 ready_replicas=dep.get("ready", 0),
                 updated_replicas=dep.get("updated", dep.get("ready", 0)),
@@ -68,25 +74,32 @@ def _k8s(deployments, pods=None):
             ),
         )
 
+    def list_pods(namespace, label_selector):
+        svc.selectors.append(label_selector)
+        items = pods() if callable(pods) else (pods or [])
+        return SimpleNamespace(items=items)
+
     svc.apps_v1 = SimpleNamespace(read_namespaced_deployment=read)
     svc.core_v1 = SimpleNamespace(
-        list_namespaced_pod=lambda namespace, label_selector: SimpleNamespace(items=pods or [])
+        list_namespaced_pod=list_pods,
+        delete_namespaced_pod=lambda name, namespace: svc.deleted.append(name),
     )
     return svc
 
 
-def _pod(waiting_reason=None, waiting_message=None, phase="Running"):
+def _pod(waiting_reason=None, waiting_message=None, phase="Running", image="nginx", restarts=0, name="pod-1"):
     state = SimpleNamespace(
         waiting=SimpleNamespace(reason=waiting_reason, message=waiting_message) if waiting_reason else None,
         terminated=None,
     )
     return SimpleNamespace(
+        metadata=SimpleNamespace(name=name),
         status=SimpleNamespace(
             phase=phase,
-            container_statuses=[SimpleNamespace(state=state)],
+            container_statuses=[SimpleNamespace(state=state, image=image, restart_count=restarts, last_state=None)],
             init_container_statuses=[],
             conditions=[],
-        )
+        ),
     )
 
 
@@ -152,8 +165,9 @@ def wired(monkeypatch):
         def deploy_application(self, **kwargs):
             return dict(state["deploy"])
 
-    def fake_wait(namespace, names, timeout_seconds):
+    def fake_wait(namespace, names, timeout_seconds, **kwargs):
         state["waited_for"] = list(names)
+        state["wait_kwargs"] = kwargs
         return [n for n in names if n not in state["problems"]], dict(state["problems"])
 
     def fake_probe(urls, timeout_seconds):

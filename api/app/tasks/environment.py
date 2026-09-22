@@ -101,8 +101,21 @@ def _run_deployment(
             result["success"] = False
             result["error"] = f"Nothing was deployed: {detail}"
         else:
+            def waiting_for_image(service: str, image: str) -> None:
+                github_service.update_pr_status(
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                    commit_sha=commit_sha,
+                    state="pending",
+                    description=f"Waiting for {service} image built from {commit_sha[:7]}",
+                )
+
             ready, problems = kubernetes_service.wait_for_deployments_ready(
-                namespace, services, timeout_seconds=settings.preview_ready_timeout_seconds
+                namespace, services,
+                timeout_seconds=settings.preview_ready_timeout_seconds,
+                image_wait_seconds=settings.preview_image_wait_seconds,
+                commit_markers=(commit_sha, commit_sha[:7]),
+                on_waiting_for_image=waiting_for_image,
             )
             if problems:
                 result["success"] = False
@@ -120,6 +133,7 @@ def _run_deployment(
                         f"{name} ({reason})" for name, reason in unreachable.items()
                     )
 
+    result["commit_sha"] = commit_sha
     if not result.get("success") and not result.get("error"):
         result["error"] = "Application deployment failed without a reported reason"
 
@@ -152,6 +166,8 @@ def _deployment_summary(result: Dict[str, Any]) -> str:
     urls = result.get("service_urls", {})
     if result.get("primary_url"):
         lines.append(f"\n**Open preview**: {result['primary_url']}")
+    if result.get("commit_sha"):
+        lines.append(f"**Commit**: `{result['commit_sha'][:7]}`")
     if services:
         lines.append("\n**Deployed Services**:")
         for service in services:
@@ -164,6 +180,19 @@ def _deployment_summary(result: Dict[str, Any]) -> str:
             "\n> **Skipped** (build-only services need a pre-built image): "
             + ", ".join(f"`{s}`" for s in skipped) + "\n"
         )
+
+    unpinned = result.get("unpinned_builds") or []
+    if unpinned:
+        names = ", ".join(f"`{n}`" for n in unpinned)
+        lines.append(
+            f"\n> **Not built from this commit**: {names} "
+            f"{'has' if len(unpinned) == 1 else 'have'} a `build:` section, but the image is not tagged "
+            "with `${EPHEMERA_SHA}`, so this preview may not contain the pull request's changes. "
+            "Have CI push an image per commit and reference it as `image: <registry>/<name>:${EPHEMERA_SHA}`.\n"
+        )
+    unset = result.get("unset_variables") or []
+    if unset:
+        lines.append("\n> **Unset variables** (substituted as empty): " + ", ".join(f"`{v}`" for v in unset) + "\n")
 
     if result.get("ai_generated") and result.get("ai_plan"):
         lines.append(f"\n<details>\n<summary>AI Deployment Plan</summary>\n\n{result['ai_plan']}\n</details>\n")
