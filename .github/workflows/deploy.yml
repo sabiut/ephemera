@@ -325,6 +325,15 @@ jobs:
             --for=condition=ready pod \
             --selector=app.kubernetes.io/component=controller \
             --timeout=300s
+
+          # The admission webhook is only trusted once these two jobs have
+          # generated its certificate and patched the CA into the webhook
+          # configuration. Until then every Ingress create fails with
+          # "x509: certificate signed by unknown authority".
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=complete \
+            job/ingress-nginx-admission-create job/ingress-nginx-admission-patch \
+            --timeout=180s
           echo "Waiting for LoadBalancer IP to be assigned..."
           sleep 30
         else
@@ -383,7 +392,15 @@ jobs:
             infrastructure/k8s/ephemera/$f.yaml | kubectl apply -f -
         done
         kubectl apply -f infrastructure/k8s/ephemera/api-service.yaml
-        kubectl apply -f infrastructure/k8s/ephemera/api-ingress.yaml
+        # The ingress admission webhook can take a little longer than its
+        # jobs to start serving with the patched certificate; retry briefly
+        # rather than fail the whole deploy on that race.
+        for attempt in $(seq 1 12); do
+          if kubectl apply -f infrastructure/k8s/ephemera/api-ingress.yaml; then break; fi
+          if [ "$attempt" = 12 ]; then echo "Ingress still rejected after 2 minutes"; exit 1; fi
+          echo "Ingress admission webhook not ready yet (attempt $attempt); retrying in 10s"
+          sleep 10
+        done
 
     - name: Wait for rollout to complete
       run: |
