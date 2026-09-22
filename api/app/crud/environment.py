@@ -1,5 +1,6 @@
+from sqlalchemy import or_
 from sqlalchemy.orm import Query, Session
-from typing import Optional, List
+from typing import List, Optional, Set
 from datetime import datetime, timezone
 from app.models.environment import Environment, EnvironmentStatus
 from app.models.user import User
@@ -12,18 +13,22 @@ ACTIVE_STATUSES = (
 )
 
 
-def visible_environments(db: Session, user: User, admin: bool) -> Query:
+def visible_environments(db: Session, user: User, admin: bool, repo_names: Optional[Set[str]] = None) -> Query:
     """
     Environments this user may see.
 
-    Every environment is owned by the PR author (the webhook and the API both
-    resolve the author to a User row), so a non-admin sees exactly the
-    environments for PRs they opened. Admins see everything.
+    Every environment is owned by the PR author, so a user always sees their
+    own. They also see every environment in repositories where they are a
+    collaborator (``repo_names``), which is what lets reviewers and QA open
+    teammates' previews. Admins see everything.
     """
     query = db.query(Environment)
-    if not admin:
-        query = query.filter(Environment.owner_id == user.id)
-    return query
+    if admin:
+        return query
+    condition = Environment.owner_id == user.id
+    if repo_names:
+        condition = or_(condition, Environment.repository_full_name.in_(sorted(repo_names)))
+    return query.filter(condition)
 
 
 def list_environments(
@@ -33,9 +38,10 @@ def list_environments(
     repository: Optional[str] = None,
     active_only: bool = False,
     limit: int = 100,
+    repo_names: Optional[Set[str]] = None,
 ) -> List[Environment]:
     """List visible environments, newest first, with optional filters."""
-    query = visible_environments(db, user, admin)
+    query = visible_environments(db, user, admin, repo_names)
     if repository:
         query = query.filter(Environment.repository_full_name == repository)
     if active_only:
@@ -44,10 +50,11 @@ def list_environments(
 
 
 def get_visible_environment(
-    db: Session, user: User, admin: bool, environment_id: Optional[int] = None, namespace: Optional[str] = None
+    db: Session, user: User, admin: bool, environment_id: Optional[int] = None,
+    namespace: Optional[str] = None, repo_names: Optional[Set[str]] = None,
 ) -> Optional[Environment]:
     """Fetch one environment by id or namespace, or None if absent or not visible."""
-    query = visible_environments(db, user, admin)
+    query = visible_environments(db, user, admin, repo_names)
     if environment_id is not None:
         query = query.filter(Environment.id == environment_id)
     if namespace is not None:

@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     # Comma-separated GitHub logins that see every environment in the API and
     # dashboard. Everyone else sees only environments for their own PRs.
     admin_github_logins: str = ""
+    # How long repository-access answers from GitHub are reused. Collaborators
+    # added or removed on GitHub take effect after at most this long.
+    repo_access_cache_seconds: int = 300
 
     # How long a preview may take to become ready (pods ready, then public
     # URLs answering) before it is reported as failed.
