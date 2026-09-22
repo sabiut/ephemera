@@ -8,6 +8,7 @@ Falls back to the deterministic DeploymentService on failure.
 """
 
 import copy
+import shlex
 
 import yaml
 import json
@@ -37,6 +38,67 @@ class RepoContext:
     compose_content: Optional[str] = None
     compose_filename: Optional[str] = None
     additional_files: Dict[str, str] = field(default_factory=dict)
+
+
+def _as_argv(value) -> Optional[List[str]]:
+    """A compose command/entrypoint as a list, split the way a shell would."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return shlex.split(value)
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    return None
+
+
+def enforce_compose_semantics(manifests: List[Dict[str, Any]], compose: Dict[str, Any]) -> List[str]:
+    """
+    Correct what a model gets wrong that the compose file fully determines.
+
+    - Image: a service with an explicit ``image:`` runs exactly that image.
+      CI builds it per commit, so a placeholder or a rewritten tag would
+      deploy the wrong code, or nothing.
+    - Command: compose ``command`` replaces the image's arguments, which is
+      Kubernetes ``args``; compose ``entrypoint`` is Kubernetes ``command``.
+      Putting compose ``command`` into Kubernetes ``command`` replaces the
+      entrypoint instead, and the container fails to start (exit 128).
+
+    Containers are matched to services by Deployment name, then container
+    name. Returns a description of each correction, for the logs.
+    """
+    services = (compose or {}).get("services") or {}
+    fixes: List[str] = []
+    for m in manifests:
+        if m.get("kind") != "Deployment":
+            continue
+        dep_name = (m.get("metadata") or {}).get("name")
+        containers = (((m.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+        for c in containers:
+            svc_name = c.get("name") if c.get("name") in services else dep_name
+            svc = services.get(svc_name)
+            if not isinstance(svc, dict):
+                continue
+            label = f"{dep_name}/{c.get('name')}"
+
+            image = svc.get("image")
+            if image and c.get("image") != str(image):
+                fixes.append(f"{label}: image {c.get('image')!r} -> {image!r}")
+                c["image"] = str(image)
+
+            cmd = _as_argv(svc.get("command"))
+            entry = _as_argv(svc.get("entrypoint"))
+            want_command, want_args = entry, cmd
+            if c.get("command") != want_command or c.get("args") != want_args:
+                if c.get("command") != want_command:
+                    fixes.append(f"{label}: command {c.get('command')!r} -> {want_command!r}")
+                if c.get("args") != want_args:
+                    fixes.append(f"{label}: args {c.get('args')!r} -> {want_args!r}")
+                for key, value in (("command", want_command), ("args", want_args)):
+                    if value is None:
+                        c.pop(key, None)
+                    else:
+                        c[key] = value
+    return fixes
 
 
 class AIDeploymentService:
@@ -204,6 +266,12 @@ class AIDeploymentService:
             # Step 7: Apply manifests (deep-copied: cached manifests must not
             # pick up this run's revision annotation)
             to_apply = copy.deepcopy(manifests)
+            try:
+                compose_doc = yaml.safe_load(repo_context.compose_content) or {}
+            except yaml.YAMLError:
+                compose_doc = {}
+            for fix in enforce_compose_semantics(to_apply, compose_doc):
+                logger.info(f"Corrected AI manifest to match docker-compose: {fix}")
             applied_count, failed, service_urls = self.deployment_service.apply_manifests(
                 to_apply, revision=ref
             )
