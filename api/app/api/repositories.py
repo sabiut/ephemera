@@ -7,11 +7,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, is_admin
+from app.crud import environment as environment_crud
+from app.database import get_db
 from app.models import User
-from app.services import repo_access
-from app.services.github import GitHubUnavailable, github_service
+from app.services import repo_access, setup_check
+from app.services.github import GitHubUnavailable, InstalledRepository, github_service
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
@@ -41,3 +44,53 @@ async def list_repositories(current_user: User = Depends(get_current_user)):
         repositories=[RepositoryResponse(**r.__dict__) for r in repos],
         install_url=github_service.app_install_url(),
     )
+
+
+def _accessible_repo(owner: str, repo: str, user: User) -> InstalledRepository:
+    """The named repository if the caller can see it, else 404."""
+    full_name = f"{owner}/{repo}".lower()
+    try:
+        repos = repo_access.accessible_repositories(user, is_admin(user))
+    except GitHubUnavailable:
+        raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
+    for r in repos:
+        if r.full_name.lower() == full_name:
+            return r
+    raise HTTPException(status_code=404, detail="Repository not found, or the Ephemera App is not installed on it")
+
+
+@router.get("/repositories/{owner}/{repo}/check")
+async def check_repository(owner: str, repo: str, current_user: User = Depends(get_current_user)):
+    """Validate the repository's compose file on its default branch before the first preview."""
+    report = setup_check.check_repository(_accessible_repo(owner, repo, current_user))
+    return report.as_dict()
+
+
+class PullResponse(BaseModel):
+    number: int
+    title: str
+    author_login: str
+    head_sha: str
+    environment_id: Optional[int] = None
+    environment_status: Optional[str] = None
+    environment_url: Optional[str] = None
+
+
+@router.get("/repositories/{owner}/{repo}/pulls", response_model=List[PullResponse])
+async def list_pulls(owner: str, repo: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Open pull requests with the state of each one's preview."""
+    installed = _accessible_repo(owner, repo, current_user)
+    try:
+        pulls = github_service.list_open_pulls(installed.installation_id, installed.full_name)
+    except GitHubUnavailable:
+        raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
+    out = []
+    for pr in pulls:
+        env = environment_crud.get_environment_by_pr(db, installed.full_name, pr.number)
+        out.append(PullResponse(
+            number=pr.number, title=pr.title, author_login=pr.author_login, head_sha=pr.head_sha,
+            environment_id=env.id if env else None,
+            environment_status=env.status.value.lower() if env else None,
+            environment_url=env.environment_url if env else None,
+        ))
+    return out

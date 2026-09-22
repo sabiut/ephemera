@@ -137,6 +137,21 @@ class GitHubService:
                 ))
         return repos
 
+    def list_open_pulls(self, installation_id: int, repo_full_name: str, limit: int = 20) -> List[PullRequestInfo]:
+        """Open pull requests, newest first."""
+        client = self.get_installation_client(installation_id)
+        if not client:
+            raise GitHubUnavailable("GitHub App integration not configured")
+        pulls: List[PullRequestInfo] = []
+        for pr in client.get_repo(repo_full_name).get_pulls(state="open", sort="created", direction="desc"):
+            pulls.append(PullRequestInfo(
+                number=pr.number, title=pr.title, state=pr.state, head_sha=pr.head.sha, head_ref=pr.head.ref,
+                author_id=pr.user.id, author_login=pr.user.login, author_avatar_url=pr.user.avatar_url,
+            ))
+            if len(pulls) >= limit:
+                break
+        return pulls
+
     def app_install_url(self) -> Optional[str]:
         """Where a user installs the App on more repositories."""
         if not self.integration:
