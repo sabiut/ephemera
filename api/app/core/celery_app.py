@@ -54,6 +54,18 @@ celery_app.conf.update(
             "task": "app.tasks.cleanup.cleanup_stale_environments",
             "schedule": 3600.0,  # Run every hour
         },
+        # One automatic retry for transient failures; see retry_failed_environments.
+        "retry-transient-failures": {
+            "task": "app.tasks.cleanup.retry_failed_environments",
+            "schedule": 900.0,  # every 15 minutes
+            "kwargs": {"max_age_hours": 1},
+        },
+        # Drop records of previews destroyed more than a week ago.
+        "delete-old-destroyed-environments": {
+            "task": "app.tasks.cleanup.cleanup_old_environments",
+            "schedule": 86400.0,  # daily
+            "kwargs": {"days": 7},
+        },
     },
 )
 
