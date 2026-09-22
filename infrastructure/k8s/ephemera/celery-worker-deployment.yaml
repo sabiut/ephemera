@@ -120,6 +120,18 @@ spec:
             secretKeyRef:
               name: ephemera-secrets
               key: ANTHROPIC_API_KEY
+        - name: DEEPSEEK_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: DEEPSEEK_API_KEY
+              optional: true
+        - name: DEEPSEEK_MODEL
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: DEEPSEEK_MODEL
+              optional: true
         resources:
           requests:
             memory: "256Mi"

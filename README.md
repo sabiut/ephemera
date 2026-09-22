@@ -168,6 +168,21 @@ The cluster pulls the image, so it must be able to reach the registry: make a Gi
 
 Supported substitutions follow docker compose: `${VAR}`, `$VAR`, `${VAR:-default}`, `${VAR-default}`, `${VAR:?message}` (fails the preview with that message), and `$$` for a literal `$`. Ephemera provides `EPHEMERA_SHA` and `EPHEMERA_SHA_SHORT` (7 characters); other unset variables become empty strings and are listed in the PR comment. A service with a `build:` section whose image is not tagged per commit still deploys, but the comment warns that it may not contain the PR's changes.
 
+## AI manifest generation
+
+When `AI_DEPLOYMENT_ENABLED` is true, Ephemera asks a language model to turn the repository's compose file, Dockerfiles and config files into Kubernetes manifests, validates and caps the result, and falls back to the built-in compose converter on any failure. The PR comment says when the fallback ran.
+
+| `AI_PROVIDER` | Key | Model setting |
+|---|---|---|
+| `anthropic` (default) | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` |
+| `openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` |
+| `gemini` | `GEMINI_API_KEY` | `GEMINI_MODEL` |
+| `deepseek` | `DEEPSEEK_API_KEY` | `DEEPSEEK_MODEL` (default `deepseek-flash`; `deepseek-v4-pro` is stronger) |
+
+DeepSeek is by far the cheapest option: a preview plan is a few thousand tokens, a small fraction of a cent on `deepseek-flash`. It is called through its OpenAI-compatible API at `https://api.deepseek.com` (override with `DEEPSEEK_BASE_URL`).
+
+For the GKE workflow, set repository **variables** `AI_PROVIDER` (for example `deepseek`) and optionally `DEEPSEEK_MODEL`, and a repository **secret** `DEEPSEEK_API_KEY`. The next deploy picks them up.
+
 ## API Endpoints
 
 ### Environments

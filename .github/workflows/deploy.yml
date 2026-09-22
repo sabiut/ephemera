@@ -366,7 +366,9 @@ jobs:
           --from-literal=GITHUB_OAUTH_CLIENT_SECRET="${{ secrets.OAUTH_CLIENT_SECRET }}" \
           --from-literal=ENCRYPTION_KEY="${{ secrets.ENCRYPTION_KEY }}" \
           --from-literal=ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \
-          --from-literal=AI_PROVIDER="anthropic" \
+          --from-literal=DEEPSEEK_API_KEY="${{ secrets.DEEPSEEK_API_KEY }}" \
+          --from-literal=DEEPSEEK_MODEL="${{ vars.DEEPSEEK_MODEL || 'deepseek-flash' }}" \
+          --from-literal=AI_PROVIDER="${{ vars.AI_PROVIDER || 'anthropic' }}" \
           --dry-run=client -o yaml | kubectl apply -f -
 
         # Apply Let's Encrypt ClusterIssuer
