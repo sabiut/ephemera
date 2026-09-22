@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # How long a preview may take to become ready (pods ready, then public
     # URLs answering) before it is reported as failed.
     preview_ready_timeout_seconds: int = 300
+    # Extra time allowed while a pod waits for an image tagged with the PR's
+    # commit, i.e. while the repository's CI is still building it.
+    preview_image_wait_seconds: int = 600
 
     # Preview namespace quotas
     preview_cpu_quota: str = "1"

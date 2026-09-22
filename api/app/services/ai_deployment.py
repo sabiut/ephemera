@@ -8,6 +8,8 @@ Falls back to the deterministic DeploymentService on failure.
 """
 
 import copy
+
+import yaml
 import json
 import hashlib
 import time
@@ -15,6 +17,7 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 
+from app.services.compose import commit_variables, image_report, interpolate
 from app.services.ai_prompts import (
     SYSTEM_PROMPT,
     build_user_prompt,
@@ -107,6 +110,18 @@ class AIDeploymentService:
                 installation_id, repo_full_name, ref
             )
 
+            # Substitute ${EPHEMERA_SHA} and friends before the model sees the
+            # file, so generated manifests name this commit's images.
+            interpolated = None
+            if repo_context.compose_content:
+                interpolated = interpolate(repo_context.compose_content, commit_variables(ref))
+                if interpolated.errors:
+                    return self._fallback(
+                        installation_id, repo_full_name, namespace, ref,
+                        "compose file requires variables that are not set",
+                    )
+                repo_context.compose_content = interpolated.text
+
             if not repo_context.compose_content:
                 return {
                     "success": False,
@@ -183,6 +198,11 @@ class AIDeploymentService:
                     manifests, repo_context, warnings=validation.warnings
                 )
 
+            try:
+                report = image_report(yaml.safe_load(repo_context.compose_content) or {}, ref)
+            except yaml.YAMLError:
+                report = image_report({}, ref)
+
             # Step 7: Apply manifests (deep-copied: cached manifests must not
             # pick up this run's revision annotation)
             to_apply = copy.deepcopy(manifests)
@@ -202,6 +222,9 @@ class AIDeploymentService:
             return {
                 "success": len(failed) == 0,
                 "compose_found": True,
+                "images": report.images,
+                "unpinned_builds": report.unpinned_builds,
+                "unset_variables": interpolated.unset if interpolated else [],
                 "applied_count": applied_count,
                 "services": services,
                 "service_urls": service_urls,

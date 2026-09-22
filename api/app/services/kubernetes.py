@@ -8,7 +8,7 @@ This service handles:
 
 import logging
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -188,21 +188,74 @@ class KubernetesService:
             logger.error(f"Failed to create resource quota: {e}")
             return False
 
+    # Waiting reasons that will not resolve by waiting longer.
+    FATAL_WAITING_REASONS = {"InvalidImageName", "ErrImageNeverPull", "CreateContainerConfigError", "CreateContainerError"}
+    IMAGE_PULL_REASONS = {"ErrImagePull", "ImagePullBackOff"}
+    CRASH_LOOP_RESTARTS = 3
+    IMAGE_RETRY_SECONDS = 30
+
+    def _pods_for(self, namespace: str, name: str):
+        """
+        Pods belonging to a Deployment, found through the Deployment's own
+        selector. AI-generated manifests do not necessarily carry the
+        ``service`` label the compose converter sets, so that label cannot
+        be assumed.
+        """
+        dep = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+        match = (dep.spec.selector.match_labels if dep.spec and dep.spec.selector else None) or {}
+        if not match:
+            return []
+        selector = ",".join(f"{k}={v}" for k, v in sorted(match.items()))
+        return self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=selector).items
+
+    def _pod_state(self, pod, commit_markers):
+        """
+        Classify a pod as ("image", image) when it is waiting for an image that
+        names this commit (CI has probably not pushed it yet), ("fatal", reason)
+        when waiting longer will not help, or (None, None).
+        """
+        statuses = (pod.status.init_container_statuses or []) + (pod.status.container_statuses or [])
+        for cs in statuses:
+            waiting = cs.state.waiting if cs.state else None
+            if not waiting or not waiting.reason:
+                continue
+            image = cs.image or ""
+            if waiting.reason in self.IMAGE_PULL_REASONS:
+                if any(m and m in image for m in commit_markers):
+                    return "image", image
+                continue  # an ordinary pull failure may be transient; the timeout decides
+            if waiting.reason in self.FATAL_WAITING_REASONS:
+                msg = (waiting.message or "").strip().split("\n")[0]
+                return "fatal", f"{waiting.reason}: {msg}" if msg else waiting.reason
+            if waiting.reason == "CrashLoopBackOff" and (cs.restart_count or 0) >= self.CRASH_LOOP_RESTARTS:
+                last = cs.last_state.terminated if cs.last_state else None
+                code = f" (last exit code {last.exit_code})" if last and last.exit_code is not None else ""
+                return "fatal", f"CrashLoopBackOff: container keeps crashing{code}"
+        return None, None
+
     def wait_for_deployments_ready(
         self,
         namespace: str,
         names: List[str],
         timeout_seconds: int = 300,
         poll_seconds: float = 5.0,
+        image_wait_seconds: int = 0,
+        commit_markers: Tuple[str, ...] = (),
+        on_waiting_for_image: Optional[Callable[[str, str], None]] = None,
     ) -> Tuple[List[str], Dict[str, str]]:
         """
-        Block until every named Deployment has all its replicas ready, or the
-        timeout passes.
+        Block until every named Deployment has all its replicas ready.
 
-        Returns (ready_names, problems) where problems maps a Deployment that
-        never became ready to the most useful reason available: a waiting
-        container's reason and message (ImagePullBackOff, CrashLoopBackOff...),
-        a failed-scheduling event, or the plain replica count.
+        While a pod is failing to pull an image that names this commit, the
+        image is assumed to still be building in the repository's CI: the
+        deadline is extended by ``image_wait_seconds``, ``on_waiting_for_image``
+        is called once, and the pod is deleted every 30 seconds so the
+        Deployment retries the pull immediately instead of backing off for
+        minutes. Errors that waiting cannot fix (invalid image name, missing
+        config, a crash loop) end the wait for that Deployment at once.
+
+        Returns (ready_names, problems) where problems maps each Deployment
+        that never became ready to the most useful reason available.
         """
         if not self.enabled:
             logger.warning("Kubernetes is disabled; cannot wait for deployments")
@@ -210,8 +263,20 @@ class KubernetesService:
 
         pending = set(names)
         ready: List[str] = []
-        deadline = time.monotonic() + timeout_seconds
-        while pending and time.monotonic() < deadline:
+        fatal: Dict[str, str] = {}
+        announced = False
+        # Once any pod has waited for a commit image, the longer deadline
+        # stays in force: after a pod is restarted to retry the pull, its
+        # replacement shows ContainerCreating rather than a pull error, and
+        # falling back to the short deadline then would give up exactly when
+        # the image has arrived.
+        image_wait_started = False
+        last_kick: Dict[str, float] = {}
+        start = time.monotonic()
+        deadline = start + timeout_seconds
+        image_deadline = deadline + image_wait_seconds
+
+        while pending:
             for name in sorted(pending):
                 try:
                     dep = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
@@ -226,19 +291,58 @@ class KubernetesService:
                 if have >= wanted and updated >= wanted:
                     ready.append(name)
                     pending.discard(name)
-            if pending:
-                time.sleep(poll_seconds)
+            if not pending:
+                break
 
-        problems = {name: self._deployment_problem(namespace, name) for name in sorted(pending)}
+            waiting_for_image = False
+            for name in sorted(pending):
+                try:
+                    pods = self._pods_for(namespace, name)
+                except ApiException:
+                    continue
+                for pod in pods:
+                    kind, detail = self._pod_state(pod, commit_markers)
+                    if kind == "fatal":
+                        fatal[name] = detail
+                        break
+                    if kind == "image":
+                        waiting_for_image = True
+                        image_wait_started = True
+                        if not announced and on_waiting_for_image:
+                            announced = True
+                            try:
+                                on_waiting_for_image(name, detail)
+                            except Exception as e:  # a status update must never break the deploy
+                                logger.warning(f"on_waiting_for_image callback failed: {e}")
+                        now = time.monotonic()
+                        if now - last_kick.get(name, start) >= self.IMAGE_RETRY_SECONDS:
+                            last_kick[name] = now
+                            try:
+                                self.core_v1.delete_namespaced_pod(name=pod.metadata.name, namespace=namespace)
+                                logger.info(f"Retrying image pull for {name} ({detail})")
+                            except ApiException as e:
+                                logger.warning(f"Could not restart pod {pod.metadata.name}: {e.status}")
+            for name in fatal:
+                pending.discard(name)
+            if not pending:
+                break
+
+            if time.monotonic() >= (image_deadline if (waiting_for_image or image_wait_started) else deadline):
+                break
+            time.sleep(poll_seconds)
+
+        problems = dict(fatal)
+        for name in sorted(pending):
+            problems[name] = self._deployment_problem(namespace, name, commit_markers)
         return ready, problems
 
-    def _deployment_problem(self, namespace: str, name: str) -> str:
+    def _deployment_problem(self, namespace: str, name: str, commit_markers: Tuple[str, ...] = ()) -> str:
         """Best-effort explanation of why a Deployment's pods are not ready."""
         try:
-            pods = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=f"service={name}")
+            pods = self._pods_for(namespace, name)
         except ApiException as e:
-            return f"could not inspect pods ({e.status})"
-        if not pods.items:
+            return "deployment not found" if e.status == 404 else f"could not inspect pods ({e.status})"
+        if not pods:
             try:
                 dep = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
             except ApiException:
@@ -247,10 +351,14 @@ class KubernetesService:
                 if cond.type == "ReplicaFailure" or (cond.type == "Progressing" and cond.status == "False"):
                     return f"{cond.reason}: {cond.message}"
             return "no pods were created"
-        for pod in pods.items:
-            for cs in (pod.status.container_statuses or []) + (pod.status.init_container_statuses or []):
+        for pod in pods:
+            statuses = (pod.status.container_statuses or []) + (pod.status.init_container_statuses or [])
+            for cs in statuses:
                 waiting = cs.state.waiting if cs.state else None
                 if waiting and waiting.reason not in (None, "ContainerCreating", "PodInitializing"):
+                    if waiting.reason in self.IMAGE_PULL_REASONS and any(m and m in (cs.image or "") for m in commit_markers):
+                        return (f"image {cs.image} was never published; check that the repository's CI "
+                                "built and pushed it for this commit")
                     msg = (waiting.message or "").strip().split("\n")[0]
                     return f"{waiting.reason}: {msg}" if msg else waiting.reason
                 terminated = cs.state.terminated if cs.state else None

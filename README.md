@@ -111,6 +111,53 @@ See [GitHub App Setup Guide](docs/github-app-setup.md) for detailed instructions
 - **PR Synchronized** → Updates environment with new commits
 - **PR Closed** → Destroys environment and cleans up resources
 
+## Previewing a pull request's own code
+
+Ephemera deploys images; it does not build them. For a preview to contain the pull request's changes, the repository's CI builds an image per commit and the compose file refers to it with `${EPHEMERA_SHA}`, which Ephemera replaces with the PR's head commit:
+
+```yaml
+# docker-compose.yml
+services:
+  web:
+    build: .
+    image: ghcr.io/acme/web:${EPHEMERA_SHA}
+    ports: ["8080:8080"]
+  db:
+    image: postgres:16        # stock images need no change
+```
+
+```yaml
+# .github/workflows/preview-image.yml
+on:
+  pull_request:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/acme/web:${{ github.event.pull_request.head.sha }}
+```
+
+The webhook usually arrives before CI has pushed the image. While a pod is failing to pull an image tagged with the PR's commit, Ephemera sets the commit status to "Waiting for web image built from abc1234", retries the pull every 30 seconds, and waits up to `PREVIEW_IMAGE_WAIT_SECONDS` (default 600) before reporting that the image was never published.
+
+The cluster pulls the image, so it must be able to reach the registry: make a GitHub Container Registry package public once (package settings, then "Change visibility"), or use a registry the cluster's nodes are authorised for.
+
+Supported substitutions follow docker compose: `${VAR}`, `$VAR`, `${VAR:-default}`, `${VAR-default}`, `${VAR:?message}` (fails the preview with that message), and `$$` for a literal `$`. Ephemera provides `EPHEMERA_SHA` and `EPHEMERA_SHA_SHORT` (7 characters); other unset variables become empty strings and are listed in the PR comment. A service with a `build:` section whose image is not tagged per commit still deploys, but the comment warns that it may not contain the PR's changes.
+
 ## API Endpoints
 
 ### Environments
