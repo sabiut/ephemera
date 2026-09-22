@@ -9,6 +9,7 @@ These tasks handle:
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from typing import List
 from celery import Task
 from sqlalchemy.orm import Session
@@ -192,51 +193,61 @@ def cleanup_old_environments(self, days: int = 7):
         }
 
 
+# Failure reasons worth one automatic retry: they can clear up on their own
+# (a slow node, a certificate still being issued, a brief API outage).
+# Everything else, such as a missing compose file, a build-only service,
+# a crash loop or an image that was never published, fails the same way
+# every time and needs a push from the developer instead.
+TRANSIENT_FAILURE_MARKERS = (
+    "Preview URLs did not answer",
+    "pod is still Pending",
+    "readiness probe has not passed",
+    "pods did not become ready in time",
+    "Failed to create Kubernetes namespace",
+    "timed out",
+    "Timeout",
+    "ConnectError",
+    "Connection",
+)
+
+
+def is_transient_failure(error_message: Optional[str]) -> bool:
+    return bool(error_message) and any(m in error_message for m in TRANSIENT_FAILURE_MARKERS)
+
+
 @celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.cleanup.retry_failed_environments")
 def retry_failed_environments(self, max_age_hours: int = 1):
     """
-    Retry provisioning for recently failed environments.
+    Retry recently failed environments once, when the failure looks transient.
 
-    Args:
-        max_age_hours: Only retry environments that failed within this many hours (default: 1)
+    An environment is retried only if its error matches a transient marker
+    and its current commit has exactly one deployment attempt. The retry
+    records a second attempt, so no environment is retried twice for the
+    same commit and a deterministic failure never loops.
     """
-    logger.info(f"Looking for failed environments to retry (within last {max_age_hours} hours)")
+    from app.crud import deployment as deployment_crud
+    from app.models import Deployment
+    from app.tasks.environment import provision_environment  # avoid a circular import
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
-    retry_count = 0
-
+    retried: list = []
+    skipped = 0
     try:
-        # Find recently failed environments
         failed_envs = self.db.query(Environment).filter(
-            and_(
-                Environment.status == EnvironmentStatus.FAILED,
-                Environment.updated_at > cutoff_date
-            )
+            and_(Environment.status == EnvironmentStatus.FAILED, Environment.updated_at > cutoff_date)
         ).all()
-
-        logger.info(f"Found {len(failed_envs)} recently failed environments")
-
         for env in failed_envs:
-            logger.info(f"Retrying provisioning for environment {env.id}")
-
-            # Import here to avoid circular dependency
-            from app.tasks.environment import provision_environment
-
-            # Trigger provisioning task
+            attempts = self.db.query(Deployment).filter(
+                Deployment.environment_id == env.id, Deployment.commit_sha == env.commit_sha
+            ).count()
+            if attempts != 1 or not is_transient_failure(env.error_message):
+                skipped += 1
+                continue
+            deployment_crud.create_deployment(self.db, env, env.commit_sha)
             provision_environment.delay(environment_id=env.id)
-            retry_count += 1
-
-        logger.info(f"Queued {retry_count} environments for retry")
-
-        return {
-            "success": True,
-            "retry_count": retry_count
-        }
-
+            retried.append(env.id)
+            logger.info(f"Retrying environment {env.id} once after transient failure: {env.error_message}")
+        return {"success": True, "retry_count": len(retried), "retried": retried, "skipped": skipped}
     except Exception as e:
         logger.error(f"Error during failed environment retry: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "retry_count": retry_count
-        }
+        return {"success": False, "error": str(e), "retry_count": len(retried)}

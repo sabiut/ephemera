@@ -134,9 +134,7 @@ class AIDeploymentService:
                 }
 
             # Step 2: Check cache
-            cache_key = self._get_cache_key(
-                repo_context.compose_content, namespace
-            )
+            cache_key = self._get_cache_key(repo_context, namespace)
             cached = self._get_cached(cache_key)
 
             if cached is not None:
@@ -482,10 +480,20 @@ class AIDeploymentService:
 
     # --- Caching ---
 
-    def _get_cache_key(self, compose_content: str, namespace: str) -> str:
-        """Generate cache key from compose content and namespace."""
-        content = f"{compose_content}:{namespace}"
-        return hashlib.sha256(content.encode()).hexdigest()
+    def _get_cache_key(self, repo_context: "RepoContext", namespace: str) -> str:
+        """
+        Cache key over everything the model is shown: the compose file and
+        every additional file (Dockerfiles, package manifests, configs). A
+        change to any of them must produce a new plan, not an hour-old one.
+        """
+        digest = hashlib.sha256()
+        digest.update(namespace.encode())
+        digest.update(b"\0compose\0")
+        digest.update((repo_context.compose_content or "").encode())
+        for name in sorted(repo_context.additional_files):
+            digest.update(b"\0" + name.encode() + b"\0")
+            digest.update(repo_context.additional_files[name].encode())
+        return digest.hexdigest()
 
     def _get_cached(self, key: str) -> Optional[List[Dict]]:
         """Get cached manifests if not expired."""
