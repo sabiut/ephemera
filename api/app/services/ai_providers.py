@@ -102,34 +102,47 @@ class AnthropicProvider(LLMProvider):
 
 # --- OpenAI GPT ---
 
-class OpenAIProvider(LLMProvider):
-    """OpenAI GPT API provider."""
+# JSON mode on OpenAI-compatible APIs only produces an object, while the
+# prompt asks for an array of manifests. Say exactly which wrapper to use so
+# the parser's unwrapping does not depend on the model's guess.
+JSON_OBJECT_WRAPPER_INSTRUCTION = (
+    '\n\nThis response uses JSON object mode: return a single JSON object of the form '
+    '{"manifests": [ ...the manifest objects... ]} and nothing else.'
+)
 
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
+
+class OpenAIProvider(LLMProvider):
+    """
+    OpenAI chat completions, and any OpenAI-compatible API through
+    ``base_url`` (DeepSeek, for example).
+    """
+
+    def __init__(self, api_key: str, model: str = "gpt-4o", base_url: Optional[str] = None, name: str = "openai"):
         from openai import OpenAI
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
         self.model = model
+        self._name = name
 
     @property
     def provider_name(self) -> str:
-        return "openai"
+        return self._name
 
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=8192,
-                timeout=60.0,
+                timeout=120.0,
                 response_format={"type": "json_object"},
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": system_prompt + JSON_OBJECT_WRAPPER_INSTRUCTION},
                     {"role": "user", "content": user_prompt},
                 ],
             )
 
             choice = response.choices[0]
             if not choice.message.content:
-                raise LLMProviderError("Empty response from OpenAI API")
+                raise LLMProviderError(f"Empty response from {self._name} API")
 
             usage = response.usage
             return LLMResponse(
@@ -137,13 +150,13 @@ class OpenAIProvider(LLMProvider):
                 input_tokens=usage.prompt_tokens if usage else None,
                 output_tokens=usage.completion_tokens if usage else None,
                 model=self.model,
-                provider="openai",
+                provider=self._name,
             )
 
         except LLMProviderError:
             raise
         except Exception as e:
-            raise LLMProviderError(f"OpenAI call failed: {e}") from e
+            raise LLMProviderError(f"{self._name} call failed: {e}") from e
 
 
 # --- Google Gemini ---
@@ -233,6 +246,16 @@ def create_provider(settings) -> Optional[LLMProvider]:
         model = getattr(settings, "gemini_model", "gemini-2.0-flash")
         logger.info(f"Initializing Gemini provider (model: {model})")
         return GeminiProvider(api_key=api_key, model=model)
+
+    elif provider_name == "deepseek":
+        api_key = getattr(settings, "deepseek_api_key", None)
+        if not api_key:
+            logger.warning("DEEPSEEK_API_KEY not set")
+            return None
+        model = getattr(settings, "deepseek_model", "deepseek-flash")
+        base_url = getattr(settings, "deepseek_base_url", "https://api.deepseek.com")
+        logger.info(f"Initializing DeepSeek provider (model: {model})")
+        return OpenAIProvider(api_key=api_key, model=model, base_url=base_url, name="deepseek")
 
     else:
         logger.error(f"Unknown AI provider: {provider_name}")

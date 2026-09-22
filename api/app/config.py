@@ -72,7 +72,7 @@ class Settings(BaseSettings):
 
     # AI Deployment
     ai_deployment_enabled: bool = True
-    ai_provider: str = "anthropic"  # "anthropic", "openai", or "gemini"
+    ai_provider: str = "anthropic"  # "anthropic", "openai", "gemini" or "deepseek"
     ai_cache_ttl: int = 3600  # seconds
 
     anthropic_api_key: Optional[str] = None
@@ -83,6 +83,12 @@ class Settings(BaseSettings):
 
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.0-flash"
+
+    # DeepSeek, through its OpenAI-compatible API. deepseek-flash is the
+    # cheap model; deepseek-v4-pro is stronger and about four times the price.
+    deepseek_api_key: Optional[str] = None
+    deepseek_model: str = "deepseek-flash"
+    deepseek_base_url: str = "https://api.deepseek.com"
 
     # AWS (only used by the EKS deployment path)
     aws_region: str = "us-west-2"
