@@ -63,6 +63,7 @@ def _k8s(deployments, pods=None, selector=None):
     def read(name, namespace):
         dep = deployments[name]
         return SimpleNamespace(
+            metadata=SimpleNamespace(annotations={"deployment.kubernetes.io/revision": dep.get("revision", "1")}),
             spec=SimpleNamespace(
                 replicas=dep.get("replicas", 1),
                 selector=SimpleNamespace(match_labels=selector or {"app": "app", "service": name}),
@@ -79,7 +80,20 @@ def _k8s(deployments, pods=None, selector=None):
         items = pods() if callable(pods) else (pods or [])
         return SimpleNamespace(items=items)
 
-    svc.apps_v1 = SimpleNamespace(read_namespaced_deployment=read)
+    def list_rs(namespace, label_selector):
+        # One ReplicaSet per known revision; hash "h<revision>".
+        items = []
+        for dname, dep in deployments.items():
+            for rev in {"1", dep.get("revision", "1")}:
+                items.append(SimpleNamespace(metadata=SimpleNamespace(
+                    name=f"{dname}-h{rev}",
+                    annotations={"deployment.kubernetes.io/revision": rev},
+                    labels={"pod-template-hash": f"h{rev}"},
+                    owner_references=[SimpleNamespace(name=dname)],
+                )))
+        return SimpleNamespace(items=items)
+
+    svc.apps_v1 = SimpleNamespace(read_namespaced_deployment=read, list_namespaced_replica_set=list_rs)
     svc.core_v1 = SimpleNamespace(
         list_namespaced_pod=list_pods,
         delete_namespaced_pod=lambda name, namespace: svc.deleted.append(name),
@@ -87,13 +101,13 @@ def _k8s(deployments, pods=None, selector=None):
     return svc
 
 
-def _pod(waiting_reason=None, waiting_message=None, phase="Running", image="nginx", restarts=0, name="pod-1"):
+def _pod(waiting_reason=None, waiting_message=None, phase="Running", image="nginx", restarts=0, name="pod-1", rs_hash="h1"):
     state = SimpleNamespace(
         waiting=SimpleNamespace(reason=waiting_reason, message=waiting_message) if waiting_reason else None,
         terminated=None,
     )
     return SimpleNamespace(
-        metadata=SimpleNamespace(name=name),
+        metadata=SimpleNamespace(name=name, labels={"pod-template-hash": rs_hash}),
         status=SimpleNamespace(
             phase=phase,
             container_statuses=[SimpleNamespace(state=state, image=image, restart_count=restarts, last_state=None)],

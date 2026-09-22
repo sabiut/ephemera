@@ -194,19 +194,41 @@ class KubernetesService:
     CRASH_LOOP_RESTARTS = 3
     IMAGE_RETRY_SECONDS = 30
 
+    REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
+
     def _pods_for(self, namespace: str, name: str):
         """
-        Pods belonging to a Deployment, found through the Deployment's own
-        selector. AI-generated manifests do not necessarily carry the
-        ``service`` label the compose converter sets, so that label cannot
-        be assumed.
+        Pods of a Deployment's current rollout only.
+
+        The Deployment's own selector is used because AI-generated manifests
+        need not carry the compose converter's ``service`` label. That
+        selector also matches pods left over from earlier rollouts, though:
+        when a failed preview is re-provisioned into the same namespace, the
+        old crash-looping pods are still there, and judging them made the
+        wait fail in seconds before the corrected pods had started. So pods
+        are narrowed to the ReplicaSet whose revision matches the
+        Deployment's current revision, via its pod-template-hash. If that
+        ReplicaSet does not exist yet, there are no current pods to judge.
         """
         dep = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
         match = (dep.spec.selector.match_labels if dep.spec and dep.spec.selector else None) or {}
         if not match:
             return []
         selector = ",".join(f"{k}={v}" for k, v in sorted(match.items()))
-        return self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=selector).items
+        pods = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=selector).items
+
+        revision = ((dep.metadata.annotations or {}) if dep.metadata else {}).get(self.REVISION_ANNOTATION)
+        if not revision:
+            return pods  # nothing to narrow by; better to judge all than none
+        current_hash = None
+        for rs in self.apps_v1.list_namespaced_replica_set(namespace=namespace, label_selector=selector).items:
+            if ((rs.metadata.annotations or {}).get(self.REVISION_ANNOTATION) == revision
+                    and any(ref.name == name for ref in (rs.metadata.owner_references or []))):
+                current_hash = (rs.metadata.labels or {}).get("pod-template-hash")
+                break
+        if not current_hash:
+            return []
+        return [p for p in pods if (p.metadata.labels or {}).get("pod-template-hash") == current_hash]
 
     def _pod_state(self, pod, commit_markers):
         """

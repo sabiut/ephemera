@@ -200,3 +200,24 @@ def test_summary_states_the_commit_and_warns_about_unpinned_builds():
     assert f"**Commit**: `{SHA[:7]}`" in summary
     assert "Not built from this commit" in summary and "`web` has" in summary
     assert "`DATABASE_URL`" in summary
+
+
+def test_leftover_pods_from_an_earlier_rollout_are_not_judged():
+    # 2026-09-23: re-provisioning a failed preview reuses its namespace. The
+    # old rollout's pod was still crash-looping, and judging it failed the
+    # retry in 18 seconds before the corrected pods had started.
+    old_crashing = _pod("CrashLoopBackOff", restarts=6, name="echo-old", rs_hash="h1")
+    new_starting = _pod("ContainerCreating", phase="Pending", name="echo-new", rs_hash="h2")
+    k8s = _k8s({"echo": {"ready": 0, "revision": "2"}}, pods=[old_crashing, new_starting])
+    started = time.monotonic()
+    _, problems = k8s.wait_for_deployments_ready("ns", ["echo"], timeout_seconds=0.3, poll_seconds=0.05)
+    assert time.monotonic() - started >= 0.3  # waited for the new rollout instead of failing fast
+    assert "CrashLoopBackOff" not in problems["echo"]
+    assert "Pending" in problems["echo"]
+
+
+def test_a_crash_in_the_current_rollout_still_fails_fast():
+    k8s = _k8s({"echo": {"ready": 0, "revision": "2"}},
+               pods=[_pod("CrashLoopBackOff", restarts=3, rs_hash="h2")])
+    _, problems = k8s.wait_for_deployments_ready("ns", ["echo"], timeout_seconds=30, poll_seconds=0.01)
+    assert problems["echo"].startswith("CrashLoopBackOff")
