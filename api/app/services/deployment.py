@@ -403,6 +403,13 @@ class DeploymentService:
             return False
 
         create, patch = api_calls[kind]
+        # Deployments are replaced whole on update. A merge patch only changes
+        # the fields it names: a field dropped from the new manifest, such as
+        # a container command, an environment variable or a probe, silently
+        # survived from the previous deployment. That kept a broken command
+        # alive through every retry of a failed preview. Other kinds keep
+        # patching, since e.g. a Service's clusterIP cannot be replaced.
+        update = self.k8s.apps_v1.replace_namespaced_deployment if kind == "Deployment" else patch
         try:
             try:
                 create(namespace=namespace, body=manifest)
@@ -410,8 +417,8 @@ class DeploymentService:
             except ApiException as e:
                 if e.status != 409:
                     raise
-                patch(name=name, namespace=namespace, body=manifest)
-                logger.info(f"Updated {kind} {name} in namespace {namespace}")
+                update(name=name, namespace=namespace, body=manifest)
+                logger.info(f"{'Replaced' if kind == 'Deployment' else 'Updated'} {kind} {name} in namespace {namespace}")
             return True
         except Exception as e:
             logger.error(f"Failed to apply {kind}/{name}: {e}")
