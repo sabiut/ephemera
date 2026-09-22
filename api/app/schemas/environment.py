@@ -43,6 +43,7 @@ class EnvironmentResponse(BaseModel):
     status: EnvironmentStatus
     installation_id: int
     owner_id: int
+    owner_login: Optional[str] = None
     error_message: Optional[str]
     last_deployed_at: Optional[datetime]
     created_at: datetime

@@ -261,7 +261,7 @@ function envTableHTML(envs) {
                 </svg>
                 <p>${isAdmin
                     ? 'No environments yet. Create a PR on a connected repository to get started.'
-                    : 'No environments for your pull requests yet. You see environments for PRs you opened; admins see everything.'}</p>
+                    : 'No environments yet. You see previews for pull requests you opened and for repositories where you are a collaborator.'}</p>
             </div>
         `;
     }
@@ -272,6 +272,7 @@ function envTableHTML(envs) {
                 <tr>
                     <th>Repository</th>
                     <th>PR</th>
+                    <th>Opened by</th>
                     <th>Branch</th>
                     <th>Status</th>
                     <th>Preview</th>
@@ -284,6 +285,7 @@ function envTableHTML(envs) {
                     <tr>
                         <td class="mono">${escapeHtml(env.repository_full_name || '-')}</td>
                         <td>#${env.pr_number || '-'}</td>
+                        <td class="text-muted">${escapeHtml(env.owner_login || '-')}</td>
                         <td class="mono text-muted">${escapeHtml(env.branch_name || '-')}</td>
                         <td>${statusBadge(env.status)}${envErrorHTML(env)}</td>
                         <td>${envPreviewHTML(env)}</td>

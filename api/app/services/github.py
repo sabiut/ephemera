@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from github import Auth, Github, GithubIntegration
 from github.GithubException import GithubException, UnknownObjectException
@@ -39,6 +39,16 @@ def _load_private_key() -> Optional[str]:
 
 class GitHubUnavailable(RuntimeError):
     """The GitHub App is not configured, so nothing can be verified against GitHub."""
+
+
+@dataclass
+class InstalledRepository:
+    full_name: str
+    name: str
+    installation_id: int
+    private: bool
+    default_branch: str
+    html_url: str
 
 
 @dataclass
@@ -107,6 +117,37 @@ class GitHubService:
             if e.status in (403, 404):
                 return None
             raise
+
+    def list_installed_repositories(self) -> List[InstalledRepository]:
+        """Every repository the App is installed on, across all installations."""
+        if not self.integration:
+            raise GitHubUnavailable("GitHub App integration not configured")
+        repos: List[InstalledRepository] = []
+        for installation in self.integration.get_installations():
+            # Installations obtained through the App re-authenticate as the
+            # installation, which /installation/repositories requires.
+            for repo in installation.get_repos():
+                repos.append(InstalledRepository(
+                    full_name=repo.full_name,
+                    name=repo.name,
+                    installation_id=installation.id,
+                    private=bool(repo.private),
+                    default_branch=repo.default_branch or "main",
+                    html_url=repo.html_url,
+                ))
+        return repos
+
+    def app_install_url(self) -> Optional[str]:
+        """Where a user installs the App on more repositories."""
+        if not self.integration:
+            return None
+        if not getattr(self, "_app_slug", None):
+            try:
+                self._app_slug = self.integration.get_app().slug
+            except GithubException as e:
+                logger.warning(f"Could not read the GitHub App slug: {e.status}")
+                return None
+        return f"https://github.com/apps/{self._app_slug}/installations/new"
 
     def get_pull_request(
         self, installation_id: int, repo_full_name: str, pr_number: int

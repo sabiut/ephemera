@@ -56,6 +56,11 @@ class Environment(Base):
     # Relationships
     deployments = relationship("Deployment", back_populates="environment", cascade="all, delete-orphan")
 
+    @property
+    def owner_login(self):
+        """GitHub login of the PR author, for "opened by" in lists."""
+        return self.owner.github_login if self.owner else None
+
     def __repr__(self):
         return f"<Environment {self.namespace} ({self.status})>"
 
