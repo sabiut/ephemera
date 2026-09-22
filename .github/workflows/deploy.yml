@@ -326,20 +326,28 @@ jobs:
             --selector=app.kubernetes.io/component=controller \
             --timeout=300s
 
-          # The admission webhook is only trusted once these two jobs have
-          # generated its certificate and patched the CA into the webhook
-          # configuration. Until then every Ingress create fails with
-          # "x509: certificate signed by unknown authority".
-          kubectl wait --namespace ingress-nginx \
-            --for=condition=complete \
-            job/ingress-nginx-admission-create job/ingress-nginx-admission-patch \
-            --timeout=180s
           echo "Waiting for LoadBalancer IP to be assigned..."
           sleep 30
         else
           echo "nginx-ingress already installed"
           kubectl patch service ingress-nginx-controller -n ingress-nginx \
             -p '{"spec":{"loadBalancerIP":"${{ env.STATIC_IP }}"}}'
+        fi
+
+        # The admission webhook is only trusted once these two jobs have
+        # generated its certificate and patched the CA into the webhook
+        # configuration; until then every Ingress create fails with
+        # "x509: certificate signed by unknown authority". The patch job
+        # retries with backoff and has taken 7 minutes on a fresh cluster,
+        # so allow 10. This runs on every deploy: a re-run right after a
+        # fresh install takes the "already installed" path above while the
+        # jobs may still be running.
+        # Skipped if the jobs were cleaned up: then they completed long ago.
+        if kubectl get job ingress-nginx-admission-patch -n ingress-nginx >/dev/null 2>&1; then
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=complete \
+            job/ingress-nginx-admission-create job/ingress-nginx-admission-patch \
+            --timeout=600s
         fi
 
     - name: Install cert-manager
