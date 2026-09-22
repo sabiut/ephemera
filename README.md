@@ -111,6 +111,16 @@ See [GitHub App Setup Guide](docs/github-app-setup.md) for detailed instructions
 - **PR Synchronized** → Updates environment with new commits
 - **PR Closed** → Destroys environment and cleans up resources
 
+## Getting a repository its first preview
+
+Signing in to the dashboard does not connect a repository; installing the Ephemera GitHub App does. The dashboard walks through it:
+
+1. **Connect a repository.** The overview shows a "Get your first preview" checklist until a preview is ready. The Repositories page lists the repositories the App is installed on that you collaborate on, with a link to install it on more.
+2. **Check the setup.** "Check setup" reads the compose file on the default branch and reports, per service, whether it can be deployed, whether it is built from each commit, and whether reviewers get a link. It flags what previews ignore (volumes, env_file, entrypoint and so on) and services without ports, which other services cannot reach by name. Each problem comes with a fix. The same report is available at `GET /api/v1/repositories/{owner}/{repo}/check`.
+3. **Create the first preview.** Open a pull request, or use "Create preview" next to an open one on the Repositories page (`GET /api/v1/repositories/{owner}/{repo}/pulls` lists them with their preview state). A failed preview offers "Retry preview".
+
+Cloud credentials and API tokens sit under **Advanced**: previews created from pull requests use neither. They exist for your own CI workflows that call the Ephemera API.
+
 ## Previewing a pull request's own code
 
 Ephemera deploys images; it does not build them. For a preview to contain the pull request's changes, the repository's CI builds an image per commit and the compose file refers to it with `${EPHEMERA_SHA}`, which Ephemera replaces with the PR's head commit:

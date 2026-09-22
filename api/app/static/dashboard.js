@@ -86,7 +86,7 @@ function toggleSidebar() {
 
 // ─── Routing ────────────────────────────────────────────
 
-const views = ['overview', 'environments', 'credentials', 'tokens'];
+const views = ['overview', 'environments', 'repositories', 'credentials', 'tokens'];
 
 function navigate() {
     const hash = window.location.hash.slice(1) || 'overview';
@@ -120,12 +120,19 @@ let cachedCredentials = [];
 let cachedTokens = [];
 let refreshInterval = null;
 let isAdmin = false;
+let cachedRepositories = null;   // null: not loaded or failed
+let repositoriesError = null;
+let installUrl = null;
 
 async function loadView(view) {
     switch (view) {
         case 'overview':
-            await Promise.all([loadEnvironments(), loadCredentials(), loadTokens()]);
+            await Promise.all([loadEnvironments(), loadCredentials(), loadTokens(), loadRepositories()]);
             renderOverview();
+            break;
+        case 'repositories':
+            await loadRepositories();
+            renderRepositories();
             break;
         case 'environments':
             await loadEnvironments();
@@ -298,6 +305,164 @@ function envTableHTML(envs) {
     `;
 }
 
+// ─── Repositories and onboarding ────────────────────────
+
+async function loadRepositories() {
+    try {
+        const body = await apiCall('/api/v1/repositories');
+        cachedRepositories = (body && body.repositories) || [];
+        installUrl = body && body.install_url;
+        repositoriesError = null;
+    } catch (e) {
+        cachedRepositories = null;
+        repositoriesError = e.message || 'Request failed';
+    }
+}
+
+function renderGettingStarted() {
+    const card = document.getElementById('gettingStarted');
+    if (!card) return;
+    const hasRepo = Array.isArray(cachedRepositories) && cachedRepositories.length > 0;
+    const hasPreview = cachedEnvironments.some(e => (e.status || '').toLowerCase() === 'ready');
+    card.hidden = hasPreview;
+    if (hasPreview) return;
+    const install = installUrl
+        ? `<a href="${escapeHtml(installUrl)}" target="_blank" style="color:#6366f1;">Install the Ephemera GitHub App</a> on the repository you want previews for.`
+        : 'Ask your Ephemera administrator to install the GitHub App on your repository.';
+    const steps = [
+        { done: hasRepo, title: 'Connect a repository', body: hasRepo
+            ? `Connected: ${cachedRepositories.slice(0, 3).map(r => escapeHtml(r.full_name)).join(', ')}${cachedRepositories.length > 3 ? '…' : ''}`
+            : install + ' Signing in does not connect repositories; installing the App does.' },
+        { done: false, title: 'Check the setup', body: 'Open <a href="#repositories" style="color:#6366f1;">Repositories</a> and run the setup check. It reads your compose file and tells you what to fix before a pull request finds out the hard way.' },
+        { done: hasPreview, title: 'Create the first preview', body: 'Open a pull request, or create a preview for an existing one from the Repositories page. The link appears on the pull request and here.' },
+    ];
+    document.getElementById('gettingStartedSteps').innerHTML = steps.map((s, i) => `
+        <li class="${s.done ? 'step-done' : ''}">
+            <span class="step-mark">${s.done ? '✓' : i + 1}</span>
+            <div><div class="step-title">${s.title}</div><div class="step-body">${s.body}</div></div>
+        </li>`).join('');
+}
+
+function renderRepositories() {
+    const list = document.getElementById('repositoriesList');
+    const link = document.getElementById('installAppLink');
+    if (installUrl) { link.href = installUrl; link.hidden = false; }
+    if (repositoriesError) {
+        list.innerHTML = `<div class="empty-state"><p><strong>Could not load repositories.</strong> ${escapeHtml(repositoriesError)}</p></div>`;
+        return;
+    }
+    if (!cachedRepositories.length) {
+        list.innerHTML = `<div class="empty-state">
+            <p>No repositories yet. Previews come from the Ephemera GitHub App, so it has to be installed on a repository first. Signing in to this dashboard does not connect one.</p>
+            ${installUrl ? `<p><a class="btn btn-primary" href="${escapeHtml(installUrl)}" target="_blank">Install the GitHub App</a></p>` : ''}
+            <p class="text-muted text-sm">After installing, come back and reload this page.</p>
+        </div>`;
+        return;
+    }
+    list.innerHTML = `<table class="table"><thead><tr><th>Repository</th><th>Default branch</th><th></th></tr></thead><tbody>
+        ${cachedRepositories.map(r => `<tr>
+            <td class="mono"><a href="${escapeHtml(r.html_url)}" target="_blank" class="text-muted">${escapeHtml(r.full_name)}</a>${r.private ? ' <span class="text-muted text-sm">private</span>' : ''}</td>
+            <td class="mono text-muted">${escapeHtml(r.default_branch)}</td>
+            <td style="text-align:right;"><button class="btn btn-primary btn-sm" onclick="selectRepository('${escapeHtml(r.full_name)}')">Check setup</button></td>
+        </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function selectRepository(fullName) {
+    const [owner, repo] = fullName.split('/');
+    const setupCard = document.getElementById('repoSetupCard');
+    const pullsCard = document.getElementById('repoPullsCard');
+    setupCard.hidden = false;
+    pullsCard.hidden = false;
+    document.getElementById('repoSetupTitle').textContent = `Setup check: ${fullName}`;
+    document.getElementById('repoSetupRef').textContent = '';
+    document.getElementById('repoSetupBody').innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+    document.getElementById('repoPullsBody').innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+    setupCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    await Promise.all([
+        runSetupCheck(owner, repo),
+        loadPulls(owner, repo),
+    ]);
+}
+
+async function runSetupCheck(owner, repo) {
+    const body = document.getElementById('repoSetupBody');
+    try {
+        const r = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/check`);
+        document.getElementById('repoSetupRef').textContent = r.compose_file ? `${r.compose_file} on ${r.ref}` : `on ${r.ref}`;
+        const icon = { ok: '✓', warning: '!', error: '✕' };
+        const order = { error: 0, warning: 1, ok: 2 };
+        const checks = [...r.checks].sort((a, b) => order[a.level] - order[b.level]);
+        const verdict = r.ready
+            ? '<p class="notice" style="margin:16px 20px;">Ready for previews. Open a pull request, or create a preview below.</p>'
+            : '<p class="notice" style="margin:16px 20px;">Fix the errors below before previews can work. Warnings will not stop a preview but may make it behave differently from docker compose.</p>';
+        const services = r.services.length ? `<table class="table"><thead><tr><th>Service</th><th>Image</th><th>Deploys</th><th>Built per commit</th><th>Link</th></tr></thead><tbody>
+            ${r.services.map(s => `<tr>
+                <td class="mono">${escapeHtml(s.name)}</td>
+                <td class="mono text-muted text-sm">${escapeHtml(s.image || '-')}</td>
+                <td>${s.deployable ? 'yes' : '<span style="color:#ef4444;">no</span>'}</td>
+                <td>${s.commit_image ? 'yes' : '<span class="text-muted">no</span>'}</td>
+                <td>${s.public ? (s.primary ? '<strong>Open preview</strong>' : 'yes') : '<span class="text-muted">-</span>'}</td>
+            </tr>`).join('')}</tbody></table>` : '';
+        body.innerHTML = verdict + checks.map(c => `
+            <div class="check check-${c.level}">
+                <span class="check-icon">${icon[c.level]}</span>
+                <div>
+                    <div class="check-title">${escapeHtml(c.title)}</div>
+                    ${c.detail ? `<div class="check-detail">${escapeHtml(c.detail)}</div>` : ''}
+                    ${c.fix ? `<div class="check-fix">${escapeHtml(c.fix)}</div>` : ''}
+                </div>
+            </div>`).join('') + services;
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p><strong>Setup check failed.</strong> ${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+async function loadPulls(owner, repo) {
+    const body = document.getElementById('repoPullsBody');
+    try {
+        const pulls = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`);
+        if (!pulls.length) {
+            body.innerHTML = '<div class="empty-state"><p>No open pull requests. Open one and its preview is created automatically.</p></div>';
+            return;
+        }
+        body.innerHTML = `<table class="table"><thead><tr><th>PR</th><th>Title</th><th>Author</th><th>Preview</th><th></th></tr></thead><tbody>
+            ${pulls.map(p => {
+                const status = p.environment_status;
+                const live = ['ready', 'provisioning', 'pending', 'updating'].includes(status);
+                const action = status === 'ready' && p.environment_url
+                    ? `<a class="btn btn-ghost btn-sm" href="${escapeHtml(p.environment_url)}" target="_blank">Open preview</a>`
+                    : live ? ''
+                    : `<button class="btn btn-primary btn-sm" onclick="createPreview('${escapeHtml(owner)}/${escapeHtml(repo)}', ${p.number}, this)">${status === 'failed' ? 'Retry preview' : 'Create preview'}</button>`;
+                return `<tr>
+                    <td>#${p.number}</td>
+                    <td>${escapeHtml(p.title)}</td>
+                    <td class="text-muted">${escapeHtml(p.author_login)}</td>
+                    <td>${status ? statusBadge(status) : '<span class="text-muted">none</span>'}</td>
+                    <td style="text-align:right;">${action}</td>
+                </tr>`;
+            }).join('')}</tbody></table>`;
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p><strong>Could not load pull requests.</strong> ${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+async function createPreview(fullName, prNumber, button) {
+    if (button) { button.disabled = true; button.textContent = 'Requesting…'; }
+    try {
+        await apiCall('/api/v1/environments/', {
+            method: 'POST',
+            body: JSON.stringify({ repository_full_name: fullName, pr_number: prNumber }),
+        });
+        showToast(`Preview requested for #${prNumber}. It appears on the pull request when ready.`);
+        const [owner, repo] = fullName.split('/');
+        await loadPulls(owner, repo);
+    } catch (e) {
+        showToast('Could not create preview: ' + e.message, 'error');
+        if (button) { button.disabled = false; button.textContent = 'Create preview'; }
+    }
+}
+
 function renderOverview() {
     const active = cachedEnvironments.filter(e => ['ready', 'provisioning', 'pending', 'updating'].includes((e.status || '').toLowerCase()));
 
@@ -305,6 +470,8 @@ function renderOverview() {
     document.getElementById('statActiveEnvs').textContent = active.length;
     document.getElementById('statCredentials').textContent = cachedCredentials.length;
     document.getElementById('statTokens').textContent = cachedTokens.length;
+
+    renderGettingStarted();
 
     // Show only 5 most recent environments
     document.getElementById('recentEnvsTable').innerHTML = envTableHTML(cachedEnvironments.slice(0, 5));
