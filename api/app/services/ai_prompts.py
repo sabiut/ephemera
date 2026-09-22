@@ -32,16 +32,22 @@ Your job: Given repository files (docker-compose.yml, Dockerfiles, configuration
    - Static frontend (nginx serving static files, React builds): Create Deployment + Service + Ingress.
 
 4. IMAGE HANDLING:
-   - If a service has `image:` in docker-compose, use that image directly.
-   - If a service has `build:` in docker-compose, you CANNOT build images. Instead, look at the Dockerfile to understand what the service does, then use the placeholder format `NEEDS_BUILD:<service_name>` as the image value. This signals to the platform that a build step is needed.
+   - If a service has `image:` in docker-compose, use that image directly and exactly as written, even when it also has `build:`. The repository's CI builds and pushes that image for each commit, so its tag must not be changed.
+   - If a service has `build:` and NO `image:`, you CANNOT build images. Instead, look at the Dockerfile to understand what the service does, then use the placeholder format `NEEDS_BUILD:<service_name>` as the image value. This signals to the platform that a build step is needed.
 
-5. ENVIRONMENT VARIABLES:
+5. COMMAND AND ENTRYPOINT (Docker Compose and Kubernetes name these differently):
+   - docker-compose `command:` replaces only the image's arguments. Put it in the container's `args`, NEVER in `command`.
+   - docker-compose `entrypoint:` replaces the image's entrypoint. Put it in the container's `command`.
+   - If the service has neither, set neither `command` nor `args`.
+   - Split a string `command:` into a list of arguments the way a shell would.
+
+6. ENVIRONMENT VARIABLES:
    - Carry over all environment variables from docker-compose.
    - For database connection strings and hostnames, update them to use the Kubernetes service name within the namespace. For example, if docker-compose has `DB_HOST=db` or `DATABASE_URL=postgres://db:5432/myapp`, change `db` to the actual K8s service name you are creating for that database service.
    - NEVER include real secrets in manifests. If you see placeholder secrets (like `password`, `changeme`, `secret`), keep them as-is for the preview environment.
    - Support both dict format (`KEY: value`) and list format (`- KEY=value`) from docker-compose.
 
-6. NETWORKING:
+7. NETWORKING:
    - All services that need external access get an Ingress with hostname: `{namespace}-{service_name}.{base_domain}`
    - Ingress configuration:
      - ingressClassName: nginx
@@ -52,13 +58,13 @@ Your job: Given repository files (docker-compose.yml, Dockerfiles, configuration
    - Internal services (databases, caches, queues) use ClusterIP only.
    - Parse port mappings from docker-compose. Format `host:container` means the container listens on the container port.
 
-7. RESOURCE LIMITS (preview environments should be conservative):
+8. RESOURCE LIMITS (preview environments should be conservative):
    - Web apps / APIs: requests 100m CPU / 128Mi RAM, limits 500m CPU / 512Mi RAM
    - Databases: requests 100m CPU / 256Mi RAM, limits 500m CPU / 1Gi RAM
    - Redis / caches: requests 50m CPU / 64Mi RAM, limits 250m CPU / 256Mi RAM
    - Workers: requests 100m CPU / 128Mi RAM, limits 500m CPU / 512Mi RAM
 
-8. HEALTH CHECKS:
+9. HEALTH CHECKS:
    - Add readinessProbe and livenessProbe for all services.
    - Web services: httpGet probe on the appropriate path and port.
    - Databases: tcpSocket probe on the database port (5432 for postgres, 3306 for mysql, 27017 for mongodb).
@@ -67,22 +73,22 @@ Your job: Given repository files (docker-compose.yml, Dockerfiles, configuration
    - periodSeconds: 10 for all.
    - timeoutSeconds: 5 for all.
 
-9. LABELS: Every resource must have these labels:
+10. LABELS: Every resource must have these labels:
    - app: {app_name}
    - service: {service_name}
    - managed-by: ephemera
 
-10. NAMESPACE: All resources must specify namespace: {namespace}
+11. NAMESPACE: All resources must specify namespace: {namespace}
 
-11. VOLUMES:
+12. VOLUMES:
     - For databases, create a PersistentVolumeClaim with 1Gi storage and ReadWriteOnce access mode.
     - Mount at the standard data directory for the database type.
     - StorageClassName should be omitted (use cluster default).
     - For named volumes in docker-compose that map to data directories, create equivalent PVCs.
 
-12. REPLICAS: Always 1 for preview environments.
+13. REPLICAS: Always 1 for preview environments.
 
-13. DEPENDS_ON / ORDERING:
+14. DEPENDS_ON / ORDERING:
     - You do not need to handle startup ordering. Kubernetes handles this via readiness probes.
     - But DO ensure that environment variables referencing other services use the correct K8s service names.
 """
