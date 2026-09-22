@@ -366,10 +366,11 @@ jobs:
     - name: Apply Kubernetes manifests
       run: |
         kubectl apply -f infrastructure/k8s/ephemera/namespace.yaml
-        kubectl apply -f infrastructure/k8s/ephemera/configmap.yaml
+        CONFIG_OUT=$(kubectl apply -f infrastructure/k8s/ephemera/configmap.yaml)
+        echo "$CONFIG_OUT"
 
         # Create secret from Terraform outputs and GitHub secrets
-        kubectl create secret generic ephemera-secrets -n ephemera-system \
+        SECRET_OUT=$(kubectl create secret generic ephemera-secrets -n ephemera-system \
           --from-literal=DATABASE_URL="${{ env.DATABASE_URL }}" \
           --from-literal=REDIS_URL="${{ env.REDIS_URL }}" \
           --from-literal=CELERY_BROKER_URL="${{ env.REDIS_URL }}" \
@@ -386,7 +387,8 @@ jobs:
           --from-literal=DEEPSEEK_API_KEY="${{ secrets.DEEPSEEK_API_KEY }}" \
           --from-literal=DEEPSEEK_MODEL="${{ vars.DEEPSEEK_MODEL || 'deepseek-flash' }}" \
           --from-literal=AI_PROVIDER="${{ vars.AI_PROVIDER || 'anthropic' }}" \
-          --dry-run=client -o yaml | kubectl apply -f -
+          --dry-run=client -o yaml | kubectl apply -f -)
+        echo "$SECRET_OUT"
 
         # Apply Let's Encrypt ClusterIssuer
         export LETSENCRYPT_EMAIL="${{ secrets.LETSENCRYPT_EMAIL }}"
@@ -395,9 +397,21 @@ jobs:
         # Substitute the commit-tagged image before applying so the pods roll
         # exactly once. Applying ":latest" and then "set image" caused two
         # back-to-back rollouts, each pulling a fresh image onto every node.
+        # Pods read the ConfigMap and Secret only when they start. A deploy
+        # that changes settings (AI_PROVIDER, a rotated key) but not the image
+        # leaves the Deployments unchanged, so nothing would restart and the
+        # new values would be ignored. Restart exactly those Deployments.
+        CONFIG_CHANGED=false
+        if echo "$CONFIG_OUT $SECRET_OUT" | grep -q " configured"; then CONFIG_CHANGED=true; fi
         for f in api-deployment celery-worker-deployment celery-beat-deployment; do
-          sed "s|\(${{ env.ARTIFACT_REGISTRY }}/[a-z-]*\):latest|\1:${{ github.sha }}|" \
-            infrastructure/k8s/ephemera/$f.yaml | kubectl apply -f -
+          OUT=$(sed "s|\(${{ env.ARTIFACT_REGISTRY }}/[a-z-]*\):latest|\1:${{ github.sha }}|" \
+            infrastructure/k8s/ephemera/$f.yaml | kubectl apply -f -)
+          echo "$OUT"
+          if [ "$CONFIG_CHANGED" = true ] && echo "$OUT" | grep -q "deployment.apps/[a-z-]* unchanged"; then
+            name=$(echo "$OUT" | grep -o "deployment.apps/[a-z-]*" | head -1)
+            echo "Settings changed; restarting $name so its pods pick them up"
+            kubectl rollout restart "$name" -n ephemera-system
+          fi
         done
         kubectl apply -f infrastructure/k8s/ephemera/api-service.yaml
         # The ingress admission webhook can take a little longer than its
