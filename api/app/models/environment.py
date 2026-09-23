@@ -52,6 +52,10 @@ class Environment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     destroyed_at = Column(DateTime(timezone=True), nullable=True)
+    # Set when the PR closes, cleared when it reopens. Tasks check it under the
+    # environment lock: a deploy queued before the close must not bring the
+    # preview back, and a teardown queued before a reopen must not remove it.
+    closed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     deployments = relationship("Deployment", back_populates="environment", cascade="all, delete-orphan")

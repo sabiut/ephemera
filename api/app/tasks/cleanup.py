@@ -263,6 +263,7 @@ def retry_failed_environments(self, max_age_hours: int = 1):
                 # The close webhook may have been missed or the environment
                 # failed before it arrived: clean up instead of retrying.
                 from app.tasks.environment import destroy_environment
+                environment_crud.mark_closed(self.db, env)
                 destroy_environment.delay(environment_id=env.id)
                 logger.info(f"PR for environment {env.id} is closed; destroying instead of retrying")
                 skipped += 1

@@ -175,6 +175,24 @@ def reset_environment(
     environment.status = EnvironmentStatus.PENDING
     environment.error_message = None
     environment.destroyed_at = None
+    environment.closed_at = None  # a reopen authorizes provisioning again
+    db.commit()
+    db.refresh(environment)
+    return environment
+
+
+def mark_closed(db: Session, environment: Environment) -> Environment:
+    """Record that the PR closed, so queued deploys stand down."""
+    if environment.closed_at is None:
+        environment.closed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(environment)
+    return environment
+
+
+def mark_reopened(db: Session, environment: Environment) -> Environment:
+    """Clear the closed marker, so a queued teardown stands down."""
+    environment.closed_at = None
     db.commit()
     db.refresh(environment)
     return environment

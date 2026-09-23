@@ -8,9 +8,11 @@ from contextlib import contextmanager
 
 import pytest
 import redis
+from celery.exceptions import Retry
 
 import app.core.locks as locks
 import app.tasks.environment as env_tasks
+from app.config import settings
 from app.crud import deployment as deployment_crud
 from app.crud import environment as environment_crud
 from app.models import DeploymentStatus, EnvironmentStatus
@@ -28,12 +30,12 @@ def db(db_session, monkeypatch):
 
 @pytest.fixture()
 def lock_log(monkeypatch):
-    log = {"held": [], "busy": False}
+    log = {"held": [], "state": locks.HELD}
 
     @contextmanager
     def fake_lock(environment_id):
         log["held"].append(environment_id)
-        yield not log["busy"]
+        yield log["state"]
 
     monkeypatch.setattr(env_tasks, "environment_lock", fake_lock)
     return log
@@ -106,11 +108,48 @@ def test_current_commit_deploys_normally_under_the_lock(db, environment, wired, 
     assert lock_log["held"] == [environment.id]
 
 
-def test_a_busy_lock_runs_nothing(db, environment, wired, lock_log, quiet):
-    lock_log["busy"] = True
-    result = _run(env_tasks.update_environment, environment_id=environment.id, commit_sha=environment.commit_sha)
-    assert result["error"] == "environment busy"
+@pytest.mark.parametrize("state", [locks.BUSY, locks.UNAVAILABLE])
+def test_a_lock_that_cannot_be_taken_reschedules_the_task(db, environment, wired, lock_log, quiet, monkeypatch, state):
+    # Before: a busy lock returned an error that Celery counted as done, and
+    # a Redis error let the task run with no lock at all.
+    lock_log["state"] = state
+    retries = []
+
+    def retry(**kwargs):
+        retries.append(kwargs)
+        return Retry()
+
+    monkeypatch.setattr(env_tasks.update_environment, "retry", retry)
+    with pytest.raises(Retry):
+        _run(env_tasks.update_environment, environment_id=environment.id, commit_sha=environment.commit_sha)
+    assert retries == [{"countdown": settings.environment_lock_retry_seconds,
+                        "max_retries": settings.environment_lock_max_retries}]
+    assert wired["waited_for"] is None  # nothing touched the cluster
+
+
+
+def test_a_deploy_out_of_retries_is_reported_failed_not_dropped(db, environment, wired, lock_log, quiet, monkeypatch):
+    lock_log["state"] = locks.BUSY
+    rec = deployment_crud.create_deployment(db, environment, environment.commit_sha)
+    task = env_tasks.update_environment
+    monkeypatch.setattr(env_tasks, "_retries_so_far", lambda t: settings.environment_lock_max_retries)
+    result = _run(task, environment_id=environment.id, commit_sha=environment.commit_sha, deployment_id=rec.id)
+    assert "timed out waiting for exclusive access" in result["error"]
+    db.refresh(environment), db.refresh(rec)
+    assert environment.status == EnvironmentStatus.FAILED
+    assert rec.status == DeploymentStatus.FAILED
+    assert quiet  # the PR is told, not left pending
     assert wired["waited_for"] is None
+
+
+def test_a_teardown_out_of_retries_is_left_for_the_hourly_cleanup(db, environment, wired, lock_log, quiet, monkeypatch):
+    lock_log["state"] = locks.UNAVAILABLE
+    environment_crud.mark_closed(db, environment)
+    monkeypatch.setattr(env_tasks, "_retries_so_far", lambda t: settings.environment_lock_max_retries)
+    result = _run(env_tasks.destroy_environment, environment_id=environment.id)
+    assert "timed out waiting" in result["error"]
+    db.refresh(environment)
+    assert environment.status == EnvironmentStatus.DESTROYING  # the stale-DESTROYING job finishes it
 
 
 # ------------------------------------------------------------------ the lock itself
@@ -136,14 +175,14 @@ class FakeRedis:
 
 
 @pytest.mark.parametrize("fake,expected,released", [
-    (FakeRedis(), True, 1),
-    (FakeRedis(acquire=False), False, 0),
-    (FakeRedis(fail=True), True, 0),  # Redis down: fail open
+    (FakeRedis(), locks.HELD, 1),
+    (FakeRedis(acquire=False), locks.BUSY, 0),
+    (FakeRedis(fail=True), locks.UNAVAILABLE, 0),  # never fails open
 ])
 def test_environment_lock(monkeypatch, fake, expected, released):
     monkeypatch.setattr(locks, "_redis", lambda: fake)
-    with locks.environment_lock(42) as held:
-        assert held is expected
+    with locks.environment_lock(42) as state:
+        assert state == expected
     assert len(fake.released) == released
     if fake.names:
         assert fake.names[0][0] == "ephemera:environment-lock:42"

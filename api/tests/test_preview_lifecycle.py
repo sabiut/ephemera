@@ -12,6 +12,9 @@ import app.api.webhooks as webhooks
 import app.tasks.cleanup as cleanup
 import app.tasks.environment as env_tasks
 from app.crud import deployment as deployment_crud
+from app.crud import environment as environment_crud
+from app.models import DeploymentStatus
+from app.services.provisioning import EnvironmentRequest, request_environment
 from app.models import Environment, EnvironmentStatus
 from app.services.kubernetes import KubernetesService as K
 from tests.test_readiness import _payload, _Session
@@ -73,6 +76,7 @@ def k8s(monkeypatch):
 ])
 def test_destroyed_only_when_the_namespace_is_gone(db, user, k8s, outcome, gone, final):
     env = _env(db, user, EnvironmentStatus.READY)
+    environment_crud.mark_closed(db, env)
     k8s["outcome"], k8s["gone"] = outcome, gone
     _run(env_tasks.destroy_environment, environment_id=env.id)
     db.refresh(env)
@@ -120,10 +124,69 @@ def test_closing_a_pr_tears_down_any_live_or_failed_preview(db, user, queued, st
     assert queued and queued[0]["environment_id"] == env.id
 
 
-def test_closing_a_pr_whose_preview_is_destroyed_does_nothing(db, user, queued):
-    _env(db, user, EnvironmentStatus.DESTROYED)
+def test_closing_a_pr_whose_preview_is_destroyed_queues_nothing_but_is_recorded(db, user, queued):
+    env = _env(db, user, EnvironmentStatus.DESTROYED)
     webhooks.handle_pull_request_closed(_payload("closed"))
     assert queued == []
+    db.refresh(env)
+    assert env.closed_at is not None  # a deploy still queued must see it
+
+
+# ------------------------------------------------------------------ ordering after close / reopen
+
+def test_a_deploy_queued_before_the_close_does_not_recreate_the_preview(db, user, monkeypatch):
+    # The review's reproduction: cleanup finished first, then a provision for
+    # the same commit took the lock and ran against a DESTROYED environment.
+    env = _env(db, user, EnvironmentStatus.DESTROYED)
+    environment_crud.mark_closed(db, env)
+    record = deployment_crud.create_deployment(db, env, env.commit_sha)
+    created = []
+    monkeypatch.setattr(env_tasks.kubernetes_service, "create_namespace", lambda *a, **k: created.append(a))
+    result = _run(env_tasks.provision_environment, environment_id=env.id,
+                  commit_sha=env.commit_sha, deployment_id=record.id)
+    assert result["skipped"] == "pull request closed"
+    assert created == []
+    db.refresh(env), db.refresh(record)
+    assert env.status == EnvironmentStatus.DESTROYED
+    assert record.status == DeploymentStatus.FAILED
+
+
+def test_an_update_queued_before_the_close_stands_down(db, user):
+    env = _env(db, user, EnvironmentStatus.READY)
+    environment_crud.mark_closed(db, env)
+    result = _run(env_tasks.update_environment, environment_id=env.id, commit_sha=env.commit_sha)
+    assert result["skipped"] == "pull request closed"
+
+
+def _reopen(db, user):
+    return request_environment(db, EnvironmentRequest(
+        repository_full_name="acme/app", repository_name="app", pr_number=3, pr_title="t",
+        branch_name="b", commit_sha="c" * 40, installation_id=1, owner=user))
+
+
+def test_reopening_authorizes_provisioning_again(db, user, retry_calls):
+    env = _env(db, user, EnvironmentStatus.DESTROYED)
+    environment_crud.mark_closed(db, env)
+    _, action = _reopen(db, user)
+    assert action == "reprovisioned" and len(retry_calls["provision"]) == 1
+    db.refresh(env)
+    assert env.closed_at is None
+    ran = []
+    env_tasks._locked(env_tasks.provision_environment, env.id, env.commit_sha, None, lambda: ran.append(1))
+    assert ran == [1]
+
+
+def test_a_teardown_queued_before_a_reopen_leaves_the_preview_alone(db, user, k8s, retry_calls):
+    # Closed and reopened before the teardown ran: the preview is still up.
+    env = _env(db, user, EnvironmentStatus.READY)
+    environment_crud.mark_closed(db, env)
+    _, action = _reopen(db, user)
+    assert action == "exists"
+    result = _run(env_tasks.destroy_environment, environment_id=env.id)
+    assert result["skipped"] == "pull request reopened"
+    assert k8s["calls"] == []
+    db.refresh(env)
+    assert env.status == EnvironmentStatus.READY
 
 
 # ------------------------------------------------------------------ retry task
@@ -154,8 +217,10 @@ def _pr_state(monkeypatch, state):
     ("error", 0, 0),    # GitHub unreachable: no blind retry
 ])
 def test_retry_respects_the_pull_requests_state(db, user, retry_calls, monkeypatch, state, provisioned, destroyed):
-    _env(db, user, EnvironmentStatus.FAILED, error="Preview URLs did not answer: web (HTTP 503)")
+    env = _env(db, user, EnvironmentStatus.FAILED, error="Preview URLs did not answer: web (HTTP 503)")
     _pr_state(monkeypatch, state)
     _run(cleanup.retry_failed_environments, max_age_hours=1)
     assert len(retry_calls["provision"]) == provisioned
     assert len(retry_calls["destroy"]) == destroyed
+    db.refresh(env)
+    assert (env.closed_at is not None) == bool(destroyed)  # else the teardown would stand down
