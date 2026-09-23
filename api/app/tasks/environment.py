@@ -72,6 +72,26 @@ def _mark_superseded(db: Session, deployment_id: Optional[int], newer: str) -> N
     _mark_stood_down(db, deployment_id, f"Superseded by newer commit {newer[:7]}")
 
 
+def _pr_closed(db: Session, environment_id: int) -> bool:
+    """Whether the PR has closed (checked again after a long deploy)."""
+    environment = environment_crud.get_environment(db, environment_id)
+    if environment is None:
+        return False
+    db.refresh(environment)
+    return environment.closed_at is not None
+
+
+def _report_not_deployed(installation_id: Optional[int], repo_full_name: Optional[str],
+                         commit_sha: Optional[str], reason: str) -> None:
+    """
+    Close out a commit's "pending" status when its task stood down. Commit
+    statuses have no neutral state; "success" with a "Not deployed" reason
+    clears the pending dot without claiming a preview. The PR's check follows
+    its newest commit, which carries the real result. No comment is posted.
+    """
+    _notify(installation_id, repo_full_name, None, commit_sha, "success", f"Not deployed: {reason}", None)
+
+
 def _mark_stood_down(db: Session, deployment_id: Optional[int], reason: str) -> None:
     """Close this task's own deployment record without touching the preview."""
     record = deployment_crud.get_deployment_by_id(db, deployment_id) if deployment_id else None
@@ -177,6 +197,13 @@ def _run_deployment(
         _mark_superseded(db, latest.id if latest else None, newer)
         result["superseded_by"] = newer
         logger.info(f"Deployment of {commit_sha[:7]} superseded by {newer[:7]} while it ran")
+        return result
+    if _pr_closed(db, environment_id):
+        # Closed while this deploy ran. The teardown queued behind the lock
+        # owns the preview now; reporting "Ready" would be false.
+        _mark_stood_down(db, latest.id if latest else None, "Pull request closed while this deployment ran")
+        result["closed_during_deploy"] = True
+        logger.info(f"PR for environment {environment_id} closed while {commit_sha[:7]} deployed; not reporting")
         return result
     if not result.get("success") and not result.get("error"):
         result["error"] = "Application deployment failed without a reported reason"
@@ -325,9 +352,14 @@ def _provision_body(
             deployment_id=deployment_id,
         )
         if result.get("superseded_by"):
-            # A newer push owns this preview now; its task will set the status
-            # and comment. Leave both alone.
+            # A newer push owns this preview now; its task sets the real
+            # status and comment. This commit's pending status is closed out.
+            _report_not_deployed(installation_id, repo_full_name, commit_sha,
+                                 f"superseded by {result['superseded_by'][:7]}")
             return {"success": False, "environment_id": environment_id, "superseded_by": result["superseded_by"]}
+        if result.get("closed_during_deploy"):
+            _report_not_deployed(installation_id, repo_full_name, commit_sha, "pull request closed")
+            return {"success": False, "environment_id": environment_id, "skipped": "pull request closed"}
 
         if not result.get("success"):
             raise RuntimeError(result.get("error") or "Application deployment failed")
@@ -354,6 +386,9 @@ Your preview environment has been created!
 
     except Exception as e:
         logger.error(f"Failed to provision environment {environment_id}: {e}", exc_info=True)
+        if _pr_closed(self.db, environment_id):
+            _report_not_deployed(installation_id, repo_full_name, commit_sha, "pull request closed")
+            return {"success": False, "environment_id": environment_id, "skipped": "pull request closed"}
         environment_crud.update_environment_status(
             self.db, environment, EnvironmentStatus.FAILED, error_message=str(e)
         )
@@ -466,9 +501,14 @@ def _update_body(
             deployment_id=deployment_id,
         )
         if result.get("superseded_by"):
-            # A newer push owns this preview now; its task will set the status
-            # and comment. Leave both alone.
+            # A newer push owns this preview now; its task sets the real
+            # status and comment. This commit's pending status is closed out.
+            _report_not_deployed(installation_id, repo_full_name, commit_sha,
+                                 f"superseded by {result['superseded_by'][:7]}")
             return {"success": False, "environment_id": environment_id, "superseded_by": result["superseded_by"]}
+        if result.get("closed_during_deploy"):
+            _report_not_deployed(installation_id, repo_full_name, commit_sha, "pull request closed")
+            return {"success": False, "environment_id": environment_id, "skipped": "pull request closed"}
         if not result.get("success"):
             raise RuntimeError(result.get("error") or "Application deployment failed")
 
@@ -494,6 +534,9 @@ Redeployed at `{commit_sha[:8]}`.
 
     except Exception as e:
         logger.error(f"Failed to update environment {environment_id}: {e}", exc_info=True)
+        if _pr_closed(self.db, environment_id):
+            _report_not_deployed(installation_id, repo_full_name, commit_sha, "pull request closed")
+            return {"success": False, "environment_id": environment_id, "skipped": "pull request closed"}
         environment_crud.update_environment_status(
             self.db, environment, EnvironmentStatus.FAILED, error_message=str(e)
         )
@@ -558,12 +601,18 @@ def _locked(task, environment_id: int, commit_sha: Optional[str], deployment_id:
                 return {"success": False, "environment_id": environment_id, "skipped": "pull request reopened"}
             if not teardown and environment.closed_at is not None:
                 _mark_stood_down(task.db, deployment_id, "Pull request closed before this deployment ran")
+                _report_not_deployed(notify[0] or environment.installation_id,
+                                     notify[1] or environment.repository_full_name, commit_sha, "pull request closed")
                 logger.info(f"Environment {environment_id}'s PR is closed; not deploying")
                 return {"success": False, "environment_id": environment_id, "skipped": "pull request closed"}
         if commit_sha:
             newer = _superseded_by(task.db, environment_id, commit_sha)
             if newer:
                 _mark_superseded(task.db, deployment_id, newer)
+                if environment is not None:
+                    _report_not_deployed(notify[0] or environment.installation_id,
+                                         notify[1] or environment.repository_full_name,
+                                         commit_sha, f"superseded by {newer[:7]}")
                 logger.info(f"Skipping {commit_sha[:7]} for environment {environment_id}: {newer[:7]} is newer")
                 return {"success": False, "environment_id": environment_id, "superseded_by": newer}
         return run()
