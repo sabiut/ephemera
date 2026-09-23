@@ -326,13 +326,30 @@ jobs:
             --selector=app.kubernetes.io/component=controller \
             --timeout=300s
 
-          echo "Waiting for LoadBalancer IP to be assigned..."
-          sleep 30
         else
           echo "nginx-ingress already installed"
           kubectl patch service ingress-nginx-controller -n ingress-nginx \
             -p '{"spec":{"loadBalancerIP":"${{ env.STATIC_IP }}"}}'
         fi
+
+        # A new load balancer takes a few minutes to accept traffic after GKE
+        # reports it. The API Ingress triggers a Let's Encrypt HTTP-01 check
+        # as soon as it exists, and on a fresh cluster that check timed out
+        # against a load balancer that was not serving yet, leaving the API
+        # on the controller's fake certificate for an hour. Any HTTP answer
+        # (nginx's 404 included) means it is reachable from outside.
+        echo "Waiting for the load balancer at ${{ env.STATIC_IP }} to answer HTTP..."
+        for attempt in $(seq 1 60); do
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://${{ env.STATIC_IP }}/" || true)
+          if [ "$code" != "000" ] && [ -n "$code" ]; then
+            echo "Load balancer answering (HTTP $code)"
+            break
+          fi
+          if [ "$attempt" = 60 ]; then
+            echo "::warning::Load balancer not answering after 10 minutes; certificate issuance may fail"
+          fi
+          sleep 10
+        done
 
         # The admission webhook is only trusted once these two jobs have
         # generated its certificate and patched the CA into the webhook
@@ -448,6 +465,50 @@ jobs:
         # database with no tables and every login a 500.
         kubectl exec -n ephemera-system deployment/ephemera-api -- alembic upgrade head
         kubectl exec -n ephemera-system deployment/ephemera-api -- alembic current
+
+    - name: Wait for the API certificate
+      run: |
+        # Without a real certificate GitHub refuses to deliver webhooks and
+        # browsers refuse the dashboard, so a deploy is not done until it is
+        # issued. A failed attempt leaves cert-manager backing off for an
+        # hour; deleting the Certificate (the Ingress recreates it) retries
+        # at once. Retries are capped to stay well inside Let's Encrypt's
+        # limit of 5 failed validations per host per hour.
+        NS=ephemera-system
+        CERT=ephemera-api-tls
+        HOST=ephemera-api.devpreview.app
+
+        resolved=$(curl -s --max-time 10 -H 'accept: application/dns-json' \
+          "https://cloudflare-dns.com/dns-query?name=${HOST}&type=A" | jq -r '[.Answer[]?|select(.type==1)|.data]|join(" ")')
+        if ! echo " $resolved " | grep -q " ${{ env.STATIC_IP }} "; then
+          echo "::warning::${HOST} resolves to '${resolved:-nothing}', not ${{ env.STATIC_IP }}. Point the Cloudflare A record (DNS only) at ${{ env.STATIC_IP }}, then run: kubectl delete certificate ${CERT} -n ${NS}"
+          exit 0
+        fi
+
+        retries=0
+        for _ in $(seq 1 60); do
+          ready=$(kubectl get certificate $CERT -n $NS -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+          if [ "$ready" = "True" ]; then
+            echo "Certificate for ${HOST} issued"
+            exit 0
+          fi
+          failed=$(kubectl get certificate $CERT -n $NS -o jsonpath='{.status.lastFailureTime}' 2>/dev/null || true)
+          if [ -n "$failed" ]; then
+            echo "Issuance failed:"
+            kubectl get challenge -n $NS -o jsonpath='{range .items[*]}{.status.reason}{"\n"}{end}' 2>/dev/null || true
+            if [ "$retries" -ge 2 ]; then
+              echo "::error::Certificate for ${HOST} still failing after $retries retries"
+              exit 1
+            fi
+            retries=$((retries + 1))
+            echo "Retrying now instead of waiting out cert-manager's backoff (retry $retries)"
+            kubectl delete certificate $CERT -n $NS --wait=true
+          fi
+          sleep 10
+        done
+        echo "::error::Certificate for ${HOST} not issued after 10 minutes"
+        kubectl describe certificate $CERT -n $NS || true
+        exit 1
 
     - name: Verify deployment
       run: |
