@@ -66,6 +66,15 @@ jobs:
     name: Destroy Infrastructure
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
     runs-on: ubuntu-latest
+    # Every job that changes the cluster or its infrastructure shares one
+    # concurrency group, so two runs (e.g. merges a minute apart) queue
+    # instead of applying manifests or Terraform at the same time. A run
+    # in progress is never cancelled half-way. Only the PR test job runs
+    # outside the group. GitHub keeps one waiting run per group: a newer
+    # one replaces it, which for deploys of main means the latest wins.
+    concurrency:
+      group: ephemera-cluster
+      cancel-in-progress: false
     environment: production
 
     steps:
@@ -148,6 +157,9 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (github.event.inputs.action == 'infra' || github.event.inputs.action == 'all')
     runs-on: ubuntu-latest
+    concurrency:  # see the destroy job
+      group: ephemera-cluster
+      cancel-in-progress: false
 
     outputs:
       static_ip: ${{ steps.get_ip.outputs.static_ip }}
@@ -221,6 +233,9 @@ jobs:
        github.event.inputs.action == 'app' ||
        github.event.inputs.action == 'all')
     runs-on: ubuntu-latest
+    concurrency:  # see the destroy job
+      group: ephemera-cluster
+      cancel-in-progress: false
 
     steps:
     - name: Checkout code
