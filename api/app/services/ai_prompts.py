@@ -30,6 +30,7 @@ Your job: Given repository files (docker-compose.yml, Dockerfiles, configuration
    - Web applications / APIs: Create Deployment + ClusterIP Service + Ingress. Add readiness and liveness probes. Use HTTP probes if you can infer the health endpoint from the code context (e.g., /health, /api/health, /healthz, /). Set reasonable resource limits based on the technology stack.
    - Workers/background jobs (celery, sidekiq, consumers): Create Deployment only. No Service. No Ingress.
    - Static frontend (nginx serving static files, React builds): Create Deployment + Service + Ingress.
+   - A docker-compose label `ephemera.public: "true"` or `"false"` overrides the above: create an Ingress for the service only if it is "true".
 
 4. IMAGE HANDLING:
    - If a service has `image:` in docker-compose, use that image directly and exactly as written, even when it also has `build:`. The repository's CI builds and pushes that image for each commit, so its tag must not be changed.

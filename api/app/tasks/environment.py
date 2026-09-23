@@ -128,6 +128,13 @@ def _run_deployment(
             )
             result["success"] = False
             result["error"] = f"Nothing was deployed: {detail}"
+        elif not result.get("service_urls"):
+            result["success"] = False
+            result["error"] = (
+                "Nothing for a reviewer to open: no deployed service serves HTTP on a published port. "
+                "Databases, caches and queues are internal. Add ports: to the web service, or label a "
+                'service ephemera.public: "true".'
+            )
         else:
             def waiting_for_image(service: str, image: str) -> None:
                 github_service.update_pr_status(

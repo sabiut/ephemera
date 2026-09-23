@@ -18,7 +18,7 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 
-from app.services.compose import commit_variables, image_report, interpolate
+from app.services.compose import classify_service, commit_variables, image_report, interpolate
 from app.services.ai_prompts import (
     SYSTEM_PROMPT,
     build_user_prompt,
@@ -49,6 +49,41 @@ def _as_argv(value) -> Optional[List[str]]:
     if isinstance(value, list):
         return [str(v) for v in value]
     return None
+
+
+def drop_internal_ingresses(manifests: List[Dict[str, Any]], compose: Dict[str, Any]) -> List[str]:
+    """
+    Remove Ingresses the model created for internal services (databases,
+    caches, queues, or anything labelled ephemera.public=false), using the
+    same rule as the compose converter and the setup check. Returns a
+    description of each removal. Mutates ``manifests`` in place.
+    """
+    from app.services.deployment import parse_port
+
+    services = (compose or {}).get("services") or {}
+    internal = set()
+    for name, cfg in services.items():
+        if not isinstance(cfg, dict):
+            continue
+        ports = [t for _, t in (p for p in map(parse_port, cfg.get("ports", []) or []) if p)]
+        public, _ = classify_service(cfg, ports)
+        if not public:
+            internal.add(name)
+    removed: List[str] = []
+    keep: List[Dict[str, Any]] = []
+    for m in manifests:
+        if m.get("kind") == "Ingress":
+            backends = {
+                ((path.get("backend") or {}).get("service") or {}).get("name")
+                for rule in (m.get("spec") or {}).get("rules") or []
+                for path in ((rule.get("http") or {}).get("paths") or [])
+            } - {None}
+            if backends and backends <= internal:
+                removed.append(f"Ingress {(m.get('metadata') or {}).get('name')} for internal {', '.join(sorted(backends))}")
+                continue
+        keep.append(m)
+    manifests[:] = keep
+    return removed
 
 
 def enforce_compose_semantics(manifests: List[Dict[str, Any]], compose: Dict[str, Any]) -> List[str]:
@@ -270,7 +305,7 @@ class AIDeploymentService:
                 compose_doc = yaml.safe_load(repo_context.compose_content) or {}
             except yaml.YAMLError:
                 compose_doc = {}
-            for fix in enforce_compose_semantics(to_apply, compose_doc):
+            for fix in enforce_compose_semantics(to_apply, compose_doc) + drop_internal_ingresses(to_apply, compose_doc):
                 logger.info(f"Corrected AI manifest to match docker-compose: {fix}")
             applied_count, failed, service_urls = self.deployment_service.apply_manifests(
                 to_apply, revision=ref

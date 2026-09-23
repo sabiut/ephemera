@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from kubernetes.client.rest import ApiException
 
-from app.services.compose import commit_variables, image_report, interpolate
+from app.services.compose import classify_service, commit_variables, image_report, interpolate
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +215,16 @@ class DeploymentService:
 
             ports = [p for p in map(parse_port, service_config.get("ports", []) or []) if p]
             if ports:
+                # Every service with ports gets an in-cluster address so the
+                # others can reach it by name; only HTTP services get a public
+                # route. A database behind an HTTP Ingress fails the URL check
+                # and used to sink an otherwise healthy preview.
                 manifests.append(self._create_service(service_name, ports, namespace, app_name))
-                manifests.append(self._create_ingress(service_name, ports[0][1], namespace, app_name))
+                public, why = classify_service(service_config, [t for _, t in ports])
+                if public:
+                    manifests.append(self._create_ingress(service_name, ports[0][1], namespace, app_name))
+                else:
+                    logger.info(f"{service_name}: internal only ({why})")
 
         logger.info(f"Generated {len(manifests)} Kubernetes manifests")
         return manifests
