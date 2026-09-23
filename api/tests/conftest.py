@@ -31,6 +31,14 @@ from app.models import APIToken, User  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def no_retry_delays(monkeypatch):
+    """GitHub notifications retry with real sleeps; tests don't wait."""
+    import app.services.github as github_module
+
+    monkeypatch.setattr(github_module, "_sleep", lambda seconds: None)
+
+
+@pytest.fixture(autouse=True)
 def no_shared_repo_access_generation(monkeypatch):
     """Repository access checks Redis for invalidations; tests have no Redis."""
     from app.services import repo_access
