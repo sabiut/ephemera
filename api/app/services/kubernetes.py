@@ -196,6 +196,32 @@ class KubernetesService:
 
     REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
 
+    @staticmethod
+    def _rollout_complete(dep) -> bool:
+        """
+        The same test ``kubectl rollout status`` applies: the controller has
+        seen the latest spec, every pod runs it, no pod of an older rollout
+        is left, and the new pods are available.
+
+        Counting ready pods and updated pods separately is not enough: during
+        a rolling update the ready pod can be the old one and the updated pod
+        not yet ready, so both counts pass while the old version serves. That
+        announced ephemera-test-app#25 as Ready on its fourth commit while the
+        page still showed the third.
+        """
+        wanted = dep.spec.replicas if dep.spec and dep.spec.replicas is not None else 1
+        status = dep.status
+        generation = getattr(dep.metadata, "generation", None) if dep.metadata else None
+        observed = getattr(status, "observed_generation", None)
+        if generation is not None and (observed is None or observed < generation):
+            return False
+        updated = getattr(status, "updated_replicas", None) or 0
+        total = getattr(status, "replicas", None) or 0
+        available = getattr(status, "available_replicas", None)
+        if available is None:
+            available = getattr(status, "ready_replicas", None) or 0
+        return updated >= wanted and total <= updated and available >= updated
+
     def _pods_for(self, namespace: str, name: str):
         """
         Pods of a Deployment's current rollout only.
@@ -316,11 +342,7 @@ class KubernetesService:
                     if e.status == 404:
                         continue
                     raise
-                wanted = dep.spec.replicas or 1
-                have = dep.status.ready_replicas or 0
-                # updated_replicas guards against counting old pods during a rollout
-                updated = dep.status.updated_replicas or 0
-                if have >= wanted and updated >= wanted:
+                if self._rollout_complete(dep):
                     ready.append(name)
                     pending.discard(name)
             if not pending:

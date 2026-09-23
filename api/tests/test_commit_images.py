@@ -240,3 +240,24 @@ def test_pods_are_not_judged_before_the_controller_sees_the_update():
     k8s.apps_v1.read_namespaced_deployment = lagging
     _, problems = k8s.wait_for_deployments_ready("ns", ["echo"], timeout_seconds=0.2, poll_seconds=0.05)
     assert "CrashLoopBackOff" not in problems["echo"]
+
+
+def _dep_status(**status):
+    from types import SimpleNamespace as NS
+    return NS(metadata=NS(generation=2), spec=NS(replicas=1), status=NS(observed_generation=2, **status))
+
+
+def test_ready_means_the_rollout_is_complete():
+    from app.services.kubernetes import KubernetesService as K
+    # 2026-09-23, fourth commit of ephemera-test-app#25: the old pod was
+    # ready and the new pod existed but was not, so "1 ready, 1 updated"
+    # passed while the page still showed the previous commit.
+    assert K._rollout_complete(_dep_status(replicas=2, updated_replicas=1, ready_replicas=1, available_replicas=1)) is False
+    # New pod ready, old pod still terminating: not complete yet either.
+    assert K._rollout_complete(_dep_status(replicas=2, updated_replicas=1, ready_replicas=2, available_replicas=2)) is False
+    # Only the new pod, and it is available: complete.
+    assert K._rollout_complete(_dep_status(replicas=1, updated_replicas=1, ready_replicas=1, available_replicas=1)) is True
+    # Controller has not seen the latest spec: never complete.
+    stale = _dep_status(replicas=1, updated_replicas=1, ready_replicas=1, available_replicas=1)
+    stale.status.observed_generation = 1
+    assert K._rollout_complete(stale) is False
