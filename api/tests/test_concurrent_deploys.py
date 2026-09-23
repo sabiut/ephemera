@@ -76,7 +76,8 @@ def test_a_task_overtaken_before_it_starts_never_deploys(db, environment, wired,
     assert wired["waited_for"] is None  # nothing deployed
     db.refresh(rec_a)
     assert rec_a.status == DeploymentStatus.FAILED and "Superseded by newer commit bbbbbbb" in rec_a.error_message
-    assert quiet == []  # no status or comment for a stale commit
+    # Only the commit's pending status is closed out; no comment.
+    assert [(n[3], n[4], n[5], n[6]) for n in quiet] == [(A, "success", "Not deployed: superseded by bbbbbbb", None)]
     assert lock_log["held"] == [environment.id]
 
 
@@ -95,7 +96,7 @@ def test_a_push_during_a_deploy_leaves_the_preview_to_the_newer_task(db, environ
     db.refresh(environment), db.refresh(rec_a)
     assert environment.status == EnvironmentStatus.UPDATING  # not overwritten to READY by the stale task
     assert rec_a.status == DeploymentStatus.FAILED
-    assert quiet == []
+    assert [(n[3], n[4], n[5], n[6]) for n in quiet] == [(A, "success", "Not deployed: superseded by bbbbbbb", None)]
 
 
 def test_current_commit_deploys_normally_under_the_lock(db, environment, wired, lock_log, quiet):
@@ -186,3 +187,37 @@ def test_environment_lock(monkeypatch, fake, expected, released):
     assert len(fake.released) == released
     if fake.names:
         assert fake.names[0][0] == "ephemera:environment-lock:42"
+
+
+def test_a_pr_closed_while_its_deploy_runs_gets_no_ready_report(db, environment, wired, lock_log, quiet, monkeypatch):
+    # Live test on test-app PR #29: provisioning was already running when the
+    # PR closed, and it posted "Environment Ready" and a green status a minute
+    # after the close.
+    environment_crud.update_environment_commit(db, environment, A)
+    rec = deployment_crud.create_deployment(db, environment, A)
+    real_wait = env_tasks.kubernetes_service.wait_for_deployments_ready
+
+    def pr_closes_mid_deploy(*args, **kwargs):
+        environment_crud.mark_closed(db, environment)
+        return real_wait(*args, **kwargs)
+
+    monkeypatch.setattr(env_tasks.kubernetes_service, "wait_for_deployments_ready", pr_closes_mid_deploy)
+    result = _run(env_tasks.update_environment, environment_id=environment.id, commit_sha=A, deployment_id=rec.id)
+    assert result["skipped"] == "pull request closed"
+    db.refresh(environment), db.refresh(rec)
+    assert environment.status != EnvironmentStatus.READY  # left for the queued teardown
+    assert rec.status == DeploymentStatus.FAILED and "closed while" in rec.error_message
+    assert [(n[4], n[5], n[6]) for n in quiet] == [("success", "Not deployed: pull request closed", None)]
+
+
+def test_a_failure_after_the_pr_closed_posts_no_failure_comment(db, environment, wired, lock_log, quiet, monkeypatch):
+    environment_crud.update_environment_commit(db, environment, A)
+
+    def fails_after_close(*args, **kwargs):
+        environment_crud.mark_closed(db, environment)
+        raise RuntimeError("cluster unreachable")
+
+    monkeypatch.setattr(env_tasks, "_run_deployment", fails_after_close)
+    result = _run(env_tasks.update_environment, environment_id=environment.id, commit_sha=A)
+    assert result["skipped"] == "pull request closed"
+    assert all(n[6] is None for n in quiet)  # status only, no "Update Failed" comment
