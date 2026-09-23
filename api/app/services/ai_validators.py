@@ -306,12 +306,10 @@ class ManifestValidator:
             result.add_error(f"{prefix}: Missing container image")
             return
 
-        # Warn on NEEDS_BUILD images
+        # Older prompts asked for this placeholder; the service is dropped
+        # before applying (drop_build_only_services) and reported as skipped.
         if image.startswith("NEEDS_BUILD:"):
-            result.add_warning(
-                f"{prefix}: Image '{image}' requires a build step. "
-                f"The service will not start until a pre-built image is pushed."
-            )
+            result.add_warning(f"{prefix}: Image '{image}' is a build placeholder; the service will be skipped.")
 
         # Security: no privileged containers, no added capabilities, no host ports
         security_context = container.get("securityContext")

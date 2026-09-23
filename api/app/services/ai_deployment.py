@@ -18,7 +18,7 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 
-from app.services.compose import classify_service, commit_variables, image_report, interpolate
+from app.services.compose import build_only_blocker, classify_service, commit_variables, image_report, interpolate
 from app.services.ai_prompts import (
     SYSTEM_PROMPT,
     build_user_prompt,
@@ -49,6 +49,46 @@ def _as_argv(value) -> Optional[List[str]]:
     if isinstance(value, list):
         return [str(v) for v in value]
     return None
+
+
+NEEDS_BUILD_PREFIX = "NEEDS_BUILD:"
+
+
+def drop_build_only_services(manifests: List[Dict[str, Any]], compose: Dict[str, Any]) -> List[str]:
+    """
+    Remove what the model generated for services that have no image to run:
+    compose services with ``build:`` and no ``image:``, and any workload
+    given a ``NEEDS_BUILD:`` placeholder image, together with their Services
+    and Ingresses. The compose converter skips the same services; deploying
+    a placeholder only produced InvalidImageName pods. Returns the skipped
+    service names, sorted. Mutates ``manifests`` in place.
+    """
+    skipped = set(image_report(compose or {}, None).build_only)
+    for m in manifests:
+        if m.get("kind") in ("Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"):
+            pod = (((m.get("spec") or {}).get("jobTemplate") or {}).get("spec") or m.get("spec") or {})
+            containers = ((pod.get("template") or {}).get("spec") or {}).get("containers") or []
+            if any(str(c.get("image", "")).startswith(NEEDS_BUILD_PREFIX) for c in containers if isinstance(c, dict)):
+                skipped.add((m.get("metadata") or {}).get("name"))
+    skipped.discard(None)
+    if not skipped:
+        return []
+    keep: List[Dict[str, Any]] = []
+    for m in manifests:
+        name = (m.get("metadata") or {}).get("name")
+        if m.get("kind") == "Ingress":
+            backends = {
+                ((path.get("backend") or {}).get("service") or {}).get("name")
+                for rule in (m.get("spec") or {}).get("rules") or []
+                for path in ((rule.get("http") or {}).get("paths") or [])
+            } - {None}
+            if backends and backends <= skipped:
+                continue
+        elif name in skipped and m.get("kind") != "ConfigMap" and m.get("kind") != "Secret":
+            continue
+        keep.append(m)
+    manifests[:] = keep
+    return sorted(skipped)
 
 
 def drop_internal_ingresses(manifests: List[Dict[str, Any]], compose: Dict[str, Any]) -> List[str]:
@@ -230,6 +270,24 @@ class AIDeploymentService:
                     "ai_fallback_reason": "No compose file found",
                 }
 
+            # Stop before calling the model when nothing a reviewer could open
+            # can be deployed (every such service is build-only).
+            try:
+                parsed_compose = yaml.safe_load(repo_context.compose_content) or {}
+            except yaml.YAMLError:
+                parsed_compose = {}
+            blocker = build_only_blocker(parsed_compose) if isinstance(parsed_compose, dict) else None
+            if blocker:
+                return {
+                    "success": False,
+                    "compose_found": True,
+                    "error": blocker,
+                    "services": [],
+                    "service_urls": {},
+                    "skipped_services": image_report(parsed_compose, ref).build_only,
+                    "ai_generated": False,
+                }
+
             # Step 2: Check cache
             cache_key = self._get_cache_key(repo_context, namespace)
             cached = self._get_cached(cache_key)
@@ -305,8 +363,11 @@ class AIDeploymentService:
                 compose_doc = yaml.safe_load(repo_context.compose_content) or {}
             except yaml.YAMLError:
                 compose_doc = {}
+            # Images first: a placeholder on a service that has image: is
+            # corrected, so only services with nothing to run are dropped.
             for fix in enforce_compose_semantics(to_apply, compose_doc) + drop_internal_ingresses(to_apply, compose_doc):
                 logger.info(f"Corrected AI manifest to match docker-compose: {fix}")
+            skipped = drop_build_only_services(to_apply, compose_doc)
             applied_count, failed, service_urls = self.deployment_service.apply_manifests(
                 to_apply, revision=ref
             )
@@ -328,6 +389,7 @@ class AIDeploymentService:
                 "unset_variables": interpolated.unset if interpolated else [],
                 "applied_count": applied_count,
                 "services": services,
+                "skipped_services": skipped,
                 "service_urls": service_urls,
                 "ai_generated": True,
                 "ai_plan": plan_summary,
