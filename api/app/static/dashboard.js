@@ -240,15 +240,85 @@ async function loadUserInfo() {
 
 // ─── Renderers ──────────────────────────────────────────
 
-function statusBadge(status) {
+function statusBadge(status, label) {
     const s = (status || 'pending').toLowerCase();
-    return `<span class="badge badge-${s}"><span class="badge-dot"></span>${s}</span>`;
+    return `<span class="badge badge-${s}"><span class="badge-dot"></span>${escapeHtml(label || s)}</span>`;
+}
+
+// A deployment attempt's status, in the colours of the preview statuses.
+function attemptBadge(status) {
+    const map = { success: ['ready', 'succeeded'], failed: ['failed', 'failed'],
+                  in_progress: ['updating', 'deploying'], queued: ['pending', 'queued'] };
+    const [style, label] = map[status] || ['pending', status];
+    return statusBadge(style, label);
 }
 
 function activeBadge(isActive) {
     return isActive
         ? '<span class="badge badge-active"><span class="badge-dot"></span>active</span>'
         : '<span class="badge badge-inactive"><span class="badge-dot"></span>inactive</span>';
+}
+
+// ─── Deployment progress ────────────────────────────────
+
+const STAGE_LABELS = {
+    queued: 'Queued',
+    preparing: 'Setting up',
+    deploying: 'Deploying services',
+    waiting_for_image: 'Waiting for image',
+    starting: 'Starting services',
+    checking_https: 'Checking HTTPS',
+    ready: 'Ready',
+    failed: 'Failed',
+    destroying: 'Removing',
+    destroyed: 'Removed',
+};
+
+function formatDuration(seconds) {
+    seconds = Math.max(0, Math.floor(seconds));
+    if (seconds < 60) return `${seconds}s`;
+    const m = Math.floor(seconds / 60), s = seconds % 60;
+    if (m < 60) return `${m}m ${String(s).padStart(2, '0')}s`;
+    return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}
+
+// Elements with data-since="<ISO time>" show the time elapsed since then and
+// tick every second between the 10-second data refreshes.
+function sinceHTML(iso) {
+    if (!iso) return '';
+    const secs = (Date.now() - new Date(iso).getTime()) / 1000;
+    return `<span data-since="${escapeHtml(iso)}">${formatDuration(secs)}</span>`;
+}
+
+setInterval(() => {
+    document.querySelectorAll('[data-since]').forEach(el => {
+        el.textContent = formatDuration((Date.now() - new Date(el.dataset.since).getTime()) / 1000);
+    });
+}, 1000);
+
+function stageLineHTML(env) {
+    const status = (env.status || '').toLowerCase();
+    if (!PENDING_STATUSES.includes(status) || !env.stage) return '';
+    const label = STAGE_LABELS[env.stage] || env.stage;
+    return `<div class="stage-line">${escapeHtml(label)} · ${sinceHTML(env.deploy_started_at || env.stage_started_at)}</div>`;
+}
+
+// The steps of this deployment. "Setting up" only applies to a new preview;
+// the image step reads "Waiting for image" while it is the current one.
+function stepperHTML(env) {
+    const status = (env.status || '').toLowerCase();
+    const steps = ['queued'];
+    if (status === 'provisioning' || status === 'pending' || env.stage === 'preparing') steps.push('preparing');
+    steps.push('deploying', 'waiting_for_image', 'starting', 'checking_https', 'ready');
+    const current = steps.indexOf(env.stage);
+    return `<ol class="stepper">${steps.map((step, i) => {
+        const state = current < 0 ? 'todo' : i < current ? 'done' : i === current ? 'current' : 'todo';
+        let label = STAGE_LABELS[step];
+        if (step === 'waiting_for_image' && state !== 'current') label = 'Image available';
+        const timer = state === 'current' ? ` <span class="text-muted">${sinceHTML(env.stage_started_at)}</span>` : '';
+        const detail = state === 'current' && env.stage_detail ? `<div class="step-detail">${escapeHtml(env.stage_detail)}</div>` : '';
+        return `<li class="step-${state}"><span class="dot">${state === 'done' ? '✓' : ''}</span><div>${escapeHtml(label)}${timer}${detail}</div></li>`;
+    }).join('')}</ol>`;
 }
 
 function timeAgo(dateStr) {
@@ -329,7 +399,7 @@ function envTableHTML(envs) {
                         <td>#${env.pr_number || '-'}</td>
                         <td class="text-muted">${escapeHtml(env.owner_login || '-')}</td>
                         <td class="mono text-muted">${escapeHtml(env.branch_name || '-')}</td>
-                        <td>${statusBadge(env.status)}${envErrorHTML(env)}</td>
+                        <td>${statusBadge(env.status)}${stageLineHTML(env)}${envErrorHTML(env)}</td>
                         <td>${envPreviewHTML(env)}</td>
                         <td class="mono text-muted text-sm">${escapeHtml((env.commit_sha || '').slice(0, 8) || '-')}</td>
                         <td class="text-muted text-sm">${timeAgo(env.created_at)}</td>
@@ -389,7 +459,7 @@ function renderEnvironmentDetail() {
         <div><div class="label">Commit</div><div class="value mono"><a href="https://github.com/${escapeHtml(repo)}/commit/${escapeHtml(sha)}" target="_blank" class="text-muted">${escapeHtml(sha.slice(0, 7) || '-')}</a></div></div>
         <div><div class="label">Branch</div><div class="value mono">${escapeHtml(env.branch_name || '-')}</div></div>
         <div><div class="label">Opened by</div><div class="value">${escapeHtml(env.owner_login || '-')}</div></div>
-        <div><div class="label">Last change</div><div class="value">${timeAgo(env.updated_at || env.created_at)}</div></div>
+        <div><div class="label">Last change</div><div class="value">${timeAgo(env.stage_started_at || env.updated_at || env.created_at)}</div></div>
     </div>`;
     const prTitle = env.pr_title ? `<p style="color:#e5e5e5;margin:0 0 16px;">${escapeHtml(env.pr_title)}</p>` : '';
 
@@ -407,8 +477,11 @@ function renderEnvironmentDetail() {
         ${env.error_message ? `<details class="tech-details"><summary>Technical details</summary><pre>${escapeHtml(env.error_message)}</pre></details>` : ''}`;
     } else if (status === 'ready') {
         main = `<div class="detail-note">Ready. ${envPreviewHTML(env)}</div>`;
+    } else if (status === 'destroying') {
+        main = '<div class="detail-note">Being removed. This updates automatically.</div>';
     } else if (PENDING_STATUSES.includes(status)) {
-        main = `<div class="detail-note">${status === 'destroying' ? 'Being removed.' : `Deploying commit <code>${escapeHtml(sha.slice(0, 7))}</code>.`} This updates automatically.</div>`;
+        const total = env.deploy_started_at ? ` · ${sinceHTML(env.deploy_started_at)} so far` : '';
+        main = `<div class="detail-note">Deploying commit <code>${escapeHtml(sha.slice(0, 7))}</code>${total}. This updates automatically.</div>${stepperHTML(env)}`;
     } else if (status === 'destroyed') {
         main = '<div class="detail-note">Removed. The pull request was closed or merged.</div>';
     }
@@ -419,7 +492,7 @@ function renderEnvironmentDetail() {
     } else if (detailDeployments.length) {
         history = `<div class="section-label">Recent attempts</div><ul class="history">${detailDeployments.map(d => {
             const why = d.status === 'failed' && d.error_message ? `<span class="why">${escapeHtml(d.error_message.split('\n')[0])}</span>` : '';
-            return `<li><span class="mono">${escapeHtml(d.commit_sha.slice(0, 7))}</span>${statusBadge(d.status === 'success' ? 'ready' : d.status)}<span class="text-muted">${timeAgo(d.created_at)}</span>${why}</li>`;
+            return `<li><span class="mono">${escapeHtml(d.commit_sha.slice(0, 7))}</span>${attemptBadge(d.status)}<span class="text-muted">${timeAgo(d.created_at)}</span>${why}</li>`;
         }).join('')}</ul>`;
     }
     body.innerHTML = prTitle + meta + main + history;

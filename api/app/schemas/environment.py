@@ -51,6 +51,10 @@ class EnvironmentResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     destroyed_at: Optional[datetime]
+    stage: Optional[str] = None
+    stage_detail: Optional[str] = None
+    stage_started_at: Optional[datetime] = None
+    deploy_started_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

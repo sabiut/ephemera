@@ -126,6 +126,7 @@ def create_environment(
         environment_url=environment_url,
         status=EnvironmentStatus.PENDING
     )
+    _queue(env)
 
     # Generate namespace
     env.namespace = env.generate_namespace()
@@ -136,6 +137,44 @@ def create_environment(
     return env
 
 
+# Statuses that end or replace a deployment's progress.
+_STATUS_STAGES = {
+    EnvironmentStatus.READY: "ready",
+    EnvironmentStatus.FAILED: "failed",
+    EnvironmentStatus.DESTROYING: "destroying",
+    EnvironmentStatus.DESTROYED: "destroyed",
+}
+
+
+def _stage(environment: Environment, stage: str, detail: Optional[str] = None) -> None:
+    environment.stage = stage
+    environment.stage_detail = detail
+    environment.stage_started_at = datetime.now(timezone.utc)
+
+
+def _queue(environment: Environment) -> None:
+    """A new deployment was requested: progress starts again at "queued"."""
+    _stage(environment, "queued")
+    environment.deploy_started_at = environment.stage_started_at
+
+
+def set_stage(db: Session, environment_id: int, stage: str, detail: Optional[str] = None,
+              commit_sha: Optional[str] = None) -> None:
+    """
+    Record the deployment's progress. A task whose commit is no longer the
+    PR's latest writes nothing, so an overtaken deploy cannot show its
+    stages against the newer commit.
+    """
+    environment = get_environment(db, environment_id)
+    if environment is None:
+        return
+    db.refresh(environment)
+    if commit_sha and environment.commit_sha != commit_sha:
+        return
+    _stage(environment, stage, detail)
+    db.commit()
+
+
 def update_environment_status(
     db: Session,
     environment: Environment,
@@ -144,6 +183,8 @@ def update_environment_status(
 ) -> Environment:
     """Update environment status"""
     environment.status = status
+    if status in _STATUS_STAGES:
+        _stage(environment, _STATUS_STAGES[status])
     if error_message:
         environment.error_message = error_message
     if status == EnvironmentStatus.READY:
@@ -175,6 +216,7 @@ def reset_environment(
     environment.status = EnvironmentStatus.PENDING
     environment.error_message = None
     environment.destroyed_at = None
+    _queue(environment)
     environment.closed_at = None  # a reopen authorizes provisioning again
     db.commit()
     db.refresh(environment)
@@ -221,6 +263,7 @@ def update_environment_commit(
     """Update environment with new commit"""
     environment.commit_sha = commit_sha
     environment.status = EnvironmentStatus.UPDATING
+    _queue(environment)
     db.commit()
     db.refresh(environment)
     return environment
