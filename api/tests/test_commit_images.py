@@ -221,3 +221,22 @@ def test_a_crash_in_the_current_rollout_still_fails_fast():
                pods=[_pod("CrashLoopBackOff", restarts=3, rs_hash="h2")])
     _, problems = k8s.wait_for_deployments_ready("ns", ["echo"], timeout_seconds=30, poll_seconds=0.01)
     assert problems["echo"].startswith("CrashLoopBackOff")
+
+
+def test_pods_are_not_judged_before_the_controller_sees_the_update():
+    # 2026-09-23, third retry: echo was updated, but the controller had not
+    # yet bumped the revision, so the previous rollout's pod (7 restarts)
+    # was judged and the retry failed after 14 seconds.
+    old_crashing = _pod("CrashLoopBackOff", restarts=7, rs_hash="h1")
+    k8s = _k8s({"echo": {"ready": 0, "revision": "1"}}, pods=[old_crashing])
+    orig = k8s.apps_v1.read_namespaced_deployment
+
+    def lagging(name, namespace):
+        dep = orig(name, namespace)
+        dep.metadata.generation = 3
+        dep.status.observed_generation = 2  # controller has not processed the update
+        return dep
+
+    k8s.apps_v1.read_namespaced_deployment = lagging
+    _, problems = k8s.wait_for_deployments_ready("ns", ["echo"], timeout_seconds=0.2, poll_seconds=0.05)
+    assert "CrashLoopBackOff" not in problems["echo"]
