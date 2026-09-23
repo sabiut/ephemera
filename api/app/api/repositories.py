@@ -13,7 +13,7 @@ from app.api.dependencies import get_current_user, is_admin
 from app.crud import environment as environment_crud
 from app.database import get_db
 from app.models import User
-from app.services import repo_access, setup_check
+from app.services import repo_access, setup_check, setup_guide
 from app.services.github import GitHubUnavailable, InstalledRepository, github_service
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -65,6 +65,19 @@ def _accessible_repo(owner: str, repo: str, user: User) -> InstalledRepository:
     raise HTTPException(status_code=404, detail="Repository not found, or the Ephemera App is not installed on it")
 
 
+def _resolve_ref(installed: InstalledRepository, pr: Optional[int]):
+    """(ref, label) for the default branch, or a pull request's latest commit."""
+    if pr is None:
+        return None, None
+    try:
+        pull = github_service.get_pull_request(installed.installation_id, installed.full_name, pr)
+    except GitHubUnavailable:
+        raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
+    if pull is None:
+        raise HTTPException(status_code=404, detail=f"Pull request #{pr} not found in {installed.full_name}")
+    return pull.head_sha, f"PR #{pr} ({pull.head_sha[:7]})"
+
+
 @router.get("/repositories/{owner}/{repo}/check")
 async def check_repository(owner: str, repo: str, pr: Optional[int] = None,
                            current_user: User = Depends(get_current_user)):
@@ -74,20 +87,26 @@ async def check_repository(owner: str, repo: str, pr: Optional[int] = None,
     PR is what gets checked.
     """
     installed = _accessible_repo(owner, repo, current_user)
-    ref, label = None, None
-    if pr is not None:
-        try:
-            pull = github_service.get_pull_request(installed.installation_id, installed.full_name, pr)
-        except GitHubUnavailable:
-            raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
-        if pull is None:
-            raise HTTPException(status_code=404, detail=f"Pull request #{pr} not found in {installed.full_name}")
-        ref, label = pull.head_sha, f"PR #{pr} ({pull.head_sha[:7]})"
+    ref, label = _resolve_ref(installed, pr)
     report = setup_check.check_repository(installed, ref=ref)
     body = report.as_dict()
     body["ref_label"] = label or report.ref
     body["pr_number"] = pr
     return body
+
+
+@router.get("/repositories/{owner}/{repo}/setup-guide")
+async def image_setup_guide(owner: str, repo: str, pr: Optional[int] = None,
+                            current_user: User = Depends(get_current_user)):
+    """
+    The CI workflow and compose changes that make previews run each commit's
+    own code, generated from the repository's compose file (default branch,
+    or a pull request's latest commit with ``pr=N``).
+    """
+    installed = _accessible_repo(owner, repo, current_user)
+    ref, _ = _resolve_ref(installed, pr)
+    _, content = setup_check._fetch_compose(installed, ref or installed.default_branch)
+    return setup_guide.build_guide(installed, content).as_dict()
 
 
 class PullResponse(BaseModel):

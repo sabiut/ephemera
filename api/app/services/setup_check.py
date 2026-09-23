@@ -67,6 +67,7 @@ class SetupReport:
     ref: str
     compose_file: Optional[str] = None
     ready: bool = False
+    needs_image_setup: bool = False   # a service has build: without a per-commit image
     checks: List[Check] = field(default_factory=list)
     services: List[ServiceSummary] = field(default_factory=list)
 
@@ -123,6 +124,7 @@ def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch
         return report
 
     images = image_report(compose, _PROBE_SHA)
+    report.needs_image_setup = bool(images.build_only or images.unpinned_builds)
     public_urls: Dict[str, str] = {}
     for name, cfg in services.items():
         cfg = cfg if isinstance(cfg, dict) else {}
