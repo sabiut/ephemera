@@ -438,6 +438,25 @@
             margin: 20px;
         }
 
+        .modal-wide { max-width: 680px; max-height: calc(100vh - 40px); overflow-y: auto; }
+        .detail-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px 20px; margin-bottom: 20px; }
+        .detail-meta .label { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+        .detail-meta .value { font-size: 14px; color: #e5e5e5; overflow-wrap: anywhere; }
+        .diagnosis { border: 1px solid #3f1d1d; border-left: 3px solid #ef4444; background: #1a1111; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .diagnosis-title { font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 6px; }
+        .diagnosis p { color: #bbb; font-size: 14px; line-height: 1.5; margin: 0 0 10px; }
+        .diagnosis .next { color: #e5e5e5; }
+        .diagnosis code, .detail-note code { background: #222; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+        .diagnosis-links { display: flex; flex-wrap: wrap; gap: 8px; }
+        .tech-details summary { cursor: pointer; color: #888; font-size: 13px; margin: 4px 0 8px; }
+        .tech-details pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 12px; font-size: 12px; color: #bbb; max-height: 240px; overflow-y: auto; }
+        .detail-note { background: #111827; border: 1px solid #1f2a44; border-radius: 8px; padding: 14px 16px; color: #cbd5e1; font-size: 14px; margin-bottom: 16px; }
+        .history { list-style: none; margin: 0; padding: 0; }
+        .history li { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid #1f1f1f; font-size: 13px; flex-wrap: wrap; }
+        .history .why { color: #888; flex-basis: 100%; overflow-wrap: anywhere; }
+        .section-label { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin: 20px 0 6px; }
+        .row-link { color: #fca5a5; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
         .modal-header {
             padding: 20px 24px;
             border-bottom: 1px solid #222;
@@ -937,6 +956,18 @@
     </div>
 
     <!-- New Token Display Modal -->
+    <!-- Environment details: what happened, what to do, retry, history -->
+    <div class="modal-overlay" id="envDetailModal">
+        <div class="modal modal-wide">
+            <div class="modal-header">
+                <span class="modal-title" id="envDetailTitle">Preview</span>
+                <button class="modal-close" onclick="closeEnvironmentDetail()" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" id="envDetailBody"></div>
+            <div class="modal-footer" id="envDetailFooter"></div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="tokenDisplayModal">
         <div class="modal">
             <div class="modal-header">

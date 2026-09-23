@@ -1,7 +1,9 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+from app.models.deployment import DeploymentStatus
 from app.models.environment import EnvironmentStatus
+from app.services.diagnosis import explain
 
 
 class EnvironmentCreate(BaseModel):
@@ -49,5 +51,26 @@ class EnvironmentResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     destroyed_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def diagnosis(self) -> Optional[Dict[str, Any]]:
+        """For a failed preview: what happened and what to do, ahead of the raw error."""
+        if self.status != EnvironmentStatus.FAILED:
+            return None
+        return explain(self.error_message, self.repository_full_name, self.commit_sha, self.pr_number).as_dict()
+
+
+class DeploymentResponse(BaseModel):
+    """One attempt to deploy a commit to a preview."""
+    id: int
+    commit_sha: str
+    status: DeploymentStatus
+    error_message: Optional[str]
+    ai_generated: bool = False
+    created_at: datetime
+    updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
