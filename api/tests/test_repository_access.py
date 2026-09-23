@@ -172,3 +172,86 @@ def test_repositories_endpoint_is_503_without_the_app(client, auth_headers, gith
 
 def test_repositories_endpoint_requires_auth(client):
     assert client.get("/api/v1/repositories").status_code == 401
+
+
+
+# ------------------------------------------------------------------ first-time connection
+
+def test_an_empty_answer_is_only_kept_briefly(github, user, monkeypatch):
+    # The review's reproduction: before installing 0, after installing and
+    # reloading still 0 for the full five-minute cache.
+    github.repos = []
+    assert repo_access.accessible_repositories(user, admin=False) == []
+    github.repos = [_repo("acme/app")]
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(repo_access.time, "monotonic", lambda: clock["now"])
+    repo_access.clear_cache()
+    github.repos = []
+    assert repo_access.accessible_repositories(user, admin=False) == []
+    github.repos = [_repo("acme/app")]
+    clock["now"] += settings.repo_access_empty_cache_seconds + 1
+    assert [r.full_name for r in repo_access.accessible_repositories(user, admin=False)] == ["acme/app"]
+
+
+def test_a_non_empty_answer_keeps_the_full_cache(github, user, monkeypatch):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(repo_access.time, "monotonic", lambda: clock["now"])
+    repo_access.accessible_repositories(user, admin=False)
+    calls = github.collaborator_calls
+    clock["now"] += settings.repo_access_empty_cache_seconds + 1
+    repo_access.accessible_repositories(user, admin=False)
+    assert github.collaborator_calls == calls  # still cached
+
+
+class FakeRedis:
+    def __init__(self):
+        self.value = None
+
+    def get(self, key):
+        return self.value
+
+    def incr(self, key):
+        self.value = str(int(self.value or 0) + 1).encode()
+
+
+def test_invalidation_reaches_every_replica(github, user, monkeypatch):
+    # Each API replica has its own cache; another replica's invalidation is
+    # seen through the shared generation counter.
+    import app.core.locks as locks
+    fake = FakeRedis()
+    monkeypatch.setattr(locks, "_redis", lambda: fake)
+    monkeypatch.setattr(repo_access, "_generation", lambda: (fake.value or b"0").decode())
+    monkeypatch.setattr(repo_access, "_seen_generation", None)
+    repo_access.accessible_repositories(user, admin=False)
+    github.repos.append(_repo("acme/new"))
+    github.collaborators["acme/new"] = {"octocat"}
+    assert "acme/new" not in {r.full_name for r in repo_access.accessible_repositories(user, admin=False)}
+    fake.incr("x")  # what invalidate() on another replica does
+    assert "acme/new" in {r.full_name for r in repo_access.accessible_repositories(user, admin=False)}
+
+
+def test_refresh_parameter_asks_github_again(client, auth_headers, github):
+    client.get("/api/v1/repositories", headers=auth_headers)
+    github.repos.append(_repo("acme/new"))
+    github.collaborators["acme/new"] = {"octocat"}
+    cached = client.get("/api/v1/repositories", headers=auth_headers).json()["repositories"]
+    assert "acme/new" not in {r["full_name"] for r in cached}
+    fresh = client.get("/api/v1/repositories?refresh=true", headers=auth_headers).json()["repositories"]
+    assert "acme/new" in {r["full_name"] for r in fresh}
+
+
+def test_installation_webhooks_invalidate_repository_access(client, monkeypatch):
+    import app.api.webhooks as webhooks
+    calls = []
+    monkeypatch.setattr(webhooks.repo_access, "invalidate", lambda: calls.append(1))
+    monkeypatch.setattr(webhooks, "verify_github_webhook", _async_body)
+    monkeypatch.setattr(webhooks, "verify_github_delivery", lambda request: "d-1")
+    for event, action in [("installation", "created"), ("installation_repositories", "added")]:
+        r = client.post("/webhooks/github", content=b'{"action": "%s"}' % action.encode(),
+                        headers={"X-GitHub-Event": event})
+        assert r.status_code == 200 and r.json()["event"] == event
+    assert calls == [1, 1]
+
+
+async def _async_body(request):
+    return await request.body()

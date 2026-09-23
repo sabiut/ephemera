@@ -2,8 +2,13 @@
 Check a repository's setup before its first preview.
 
 Everything here is read-only: it fetches the compose file from the default
-branch and reports what a preview would do with it, so problems show up in
-the dashboard with a fix rather than as a failed deployment on a PR.
+branch (or a pull request's commit) and reports what a preview would do with
+it, so problems show up in the dashboard with a fix rather than as a failed
+deployment on a PR.
+
+It checks configuration only. It does not know whether CI has published an
+image or whether the cluster can pull it; that is verified when a preview
+deploys, and the wording here must not claim more.
 """
 
 from dataclasses import asdict, dataclass, field
@@ -85,16 +90,17 @@ def _fetch_compose(repo: InstalledRepository, ref: str):
 def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch=_fetch_compose) -> SetupReport:
     ref = ref or repo.default_branch
     report = SetupReport(repository=repo.full_name, ref=ref)
+    where = ref[:7] if len(ref) == 40 and all(c in "0123456789abcdef" for c in ref) else ref
     add = report.checks.append
 
     filename, content = fetch(repo, ref)
     if not content:
         add(Check("error", "No compose file",
-                  f"None of {', '.join(COMPOSE_FILENAMES)} exists on {ref}.",
+                  f"None of {', '.join(COMPOSE_FILENAMES)} exists at {where}.",
                   "Add a docker-compose.yml describing the services a reviewer needs."))
         return report
     report.compose_file = filename
-    add(Check("ok", f"Found {filename}", f"on {ref}"))
+    add(Check("ok", f"Found {filename}", f"at {where}"))
 
     interpolated = interpolate(content, commit_variables(_PROBE_SHA))
     for err in interpolated.errors:
@@ -145,7 +151,9 @@ def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch
                       "so previews will run that image rather than the PR's code.",
                       f"Tag the image with ${{EPHEMERA_SHA}} and have CI push it for every commit."))
         elif name in images.pinned:
-            add(Check("ok", f"{name}: built from each commit", images.images[name]))
+            add(Check("ok", f"{name}: image tag follows each commit",
+                      f"{images.images[name]}. Whether CI has pushed it, and whether the cluster can pull it, "
+                      "is checked when a preview deploys."))
 
         if deployable and not ports:
             add(Check("warning", f"{name}: has no ports",

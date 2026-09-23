@@ -126,7 +126,7 @@ let installUrl = null;
 async function loadView(view) {
     switch (view) {
         case 'overview':
-            await Promise.all([loadEnvironments(), loadCredentials(), loadTokens(), loadRepositories()]);
+            await Promise.all([loadEnvironments(), loadRepositories()]);
             renderOverview();
             break;
         case 'repositories':
@@ -331,15 +331,38 @@ function envTableHTML(envs) {
 
 // ─── Repositories and onboarding ────────────────────────
 
-async function loadRepositories() {
+async function loadRepositories(refresh = false) {
     try {
-        const body = await apiCall('/api/v1/repositories');
+        const body = await apiCall('/api/v1/repositories' + (refresh ? '?refresh=true' : ''));
         cachedRepositories = (body && body.repositories) || [];
         installUrl = body && body.install_url;
         repositoriesError = null;
     } catch (e) {
         cachedRepositories = null;
         repositoriesError = e.message || 'Request failed';
+    }
+}
+
+// Asks GitHub again instead of using cached access. Installing the App also
+// refreshes it on the server, but this is the button a user reaches for.
+async function refreshRepositories(button) {
+    if (button) { button.disabled = true; button.textContent = 'Refreshing…'; }
+    const before = Array.isArray(cachedRepositories) ? cachedRepositories.length : 0;
+    try {
+        await loadRepositories(true);
+        renderRepositories();
+        if (document.getElementById('view-overview').classList.contains('active')) renderOverview();
+        if (repositoriesError) {
+            showToast('Could not refresh repositories: ' + repositoriesError, 'error');
+        } else {
+            const n = cachedRepositories.length;
+            showToast(n === 0
+                ? 'Still no repositories. Check the App is installed on the repository and that you are a collaborator on it.'
+                : n > before ? `Found ${n - before} new ${n - before === 1 ? 'repository' : 'repositories'}.`
+                : `${n} ${n === 1 ? 'repository' : 'repositories'} connected.`, n === 0 ? 'error' : 'success');
+        }
+    } finally {
+        if (button) { button.disabled = false; button.textContent = 'Refresh repositories'; }
     }
 }
 
@@ -364,7 +387,8 @@ function renderGettingStarted() {
     const steps = [
         { done: hasRepo, title: 'Connect a repository', body: hasRepo
             ? `Connected: ${cachedRepositories.slice(0, 3).map(r => escapeHtml(r.full_name)).join(', ')}${cachedRepositories.length > 3 ? '…' : ''}`
-            : install + ' Signing in does not connect repositories; installing the App does.' },
+            : install + ' Signing in does not connect repositories; installing the App does. '
+              + 'Installed already? <a href="#" onclick="refreshRepositories(); return false;" style="color:#6366f1;">Refresh repositories</a>.' },
         { done: false, title: 'Check the setup', body: 'Open <a href="#repositories" style="color:#6366f1;">Repositories</a> and run the setup check. It reads your compose file and tells you what to fix before a pull request finds out the hard way.' },
         { done: hasPreview, title: 'Create the first preview', body: 'Open a pull request, or create a preview for an existing one from the Repositories page. The link appears on the pull request and here.' },
     ];
@@ -387,7 +411,8 @@ function renderRepositories() {
         list.innerHTML = `<div class="empty-state">
             <p>No repositories yet. Previews come from the Ephemera GitHub App, so it has to be installed on a repository first. Signing in to this dashboard does not connect one.</p>
             ${installUrl ? `<p><a class="btn btn-primary" href="${escapeHtml(installUrl)}" target="_blank">Install the GitHub App</a></p>` : ''}
-            <p class="text-muted text-sm">After installing, come back and reload this page.</p>
+            <p class="text-muted text-sm">Installed it already? <button class="btn btn-ghost btn-sm" onclick="refreshRepositories(this)">Refresh repositories</button></p>
+            <p class="text-muted text-sm">A repository only appears if you are a collaborator on it.</p>
         </div>`;
         return;
     }
@@ -418,23 +443,39 @@ async function selectRepository(fullName) {
     ]);
 }
 
-async function runSetupCheck(owner, repo) {
+// Re-run the setup check at a pull request's latest commit, so a fix made
+// inside the PR is what gets checked rather than the default branch.
+async function checkPull(fullName, prNumber) {
+    const [owner, repo] = fullName.split('/');
+    document.getElementById('repoSetupBody').innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+    document.getElementById('repoSetupCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    await runSetupCheck(owner, repo, prNumber);
+}
+
+async function runSetupCheck(owner, repo, prNumber = null) {
     const body = document.getElementById('repoSetupBody');
     try {
-        const r = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/check`);
-        document.getElementById('repoSetupRef').textContent = r.compose_file ? `${r.compose_file} on ${r.ref}` : `on ${r.ref}`;
+        const query = prNumber ? `?pr=${prNumber}` : '';
+        const r = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/check${query}`);
+        const where = r.ref_label || r.ref;
+        document.getElementById('repoSetupRef').textContent = r.compose_file ? `${r.compose_file} at ${where}` : `at ${where}`;
+        const back = prNumber
+            ? ` <a href="#" onclick="runSetupCheck('${escapeHtml(owner)}', '${escapeHtml(repo)}'); return false;" style="color:#6366f1;">Check the default branch instead</a>`
+            : '';
         const icon = { ok: '✓', warning: '!', error: '✕' };
         const order = { error: 0, warning: 1, ok: 2 };
         const checks = [...r.checks].sort((a, b) => order[a.level] - order[b.level]);
+        // Configuration only: whether CI published the image and the cluster
+        // can pull it is only known once a preview deploys.
         const verdict = r.ready
-            ? '<p class="notice" style="margin:16px 20px;">Ready for previews. Open a pull request, or create a preview below.</p>'
-            : '<p class="notice" style="margin:16px 20px;">Fix the errors below before previews can work. Warnings will not stop a preview but may make it behave differently from docker compose.</p>';
-        const services = r.services.length ? `<table class="table"><thead><tr><th>Service</th><th>Image</th><th>Deploys</th><th>Built per commit</th><th>Link</th></tr></thead><tbody>
+            ? `<p class="notice" style="margin:16px 20px;"><strong>Configuration checks passed.</strong> Image availability is verified when a preview deploys: CI must push each image before Ephemera can start it. Open a pull request, or create a preview below.${back}</p>`
+            : `<p class="notice" style="margin:16px 20px;"><strong>Fix the errors below before previews can work.</strong> Warnings will not stop a preview but may make it behave differently from docker compose.${back}</p>`;
+        const services = r.services.length ? `<table class="table"><thead><tr><th>Service</th><th>Image</th><th>Deploys</th><th>Tag per commit</th><th>Link</th></tr></thead><tbody>
             ${r.services.map(s => `<tr>
                 <td class="mono">${escapeHtml(s.name)}</td>
                 <td class="mono text-muted text-sm">${escapeHtml(s.image || '-')}</td>
                 <td>${s.deployable ? 'yes' : '<span style="color:#ef4444;">no</span>'}</td>
-                <td>${s.commit_image ? 'yes' : '<span class="text-muted">no</span>'}</td>
+                <td>${s.commit_image ? 'configured' : '<span class="text-muted">no</span>'}</td>
                 <td>${s.public ? (s.primary ? '<strong>Open preview</strong>' : 'yes') : '<span class="text-muted">-</span>'}</td>
             </tr>`).join('')}</tbody></table>` : '';
         body.innerHTML = verdict + checks.map(c => `
@@ -468,12 +509,13 @@ async function loadPulls(owner, repo) {
                     ? `<a class="btn btn-ghost btn-sm" href="${escapeHtml(p.environment_url)}" target="_blank">Open preview</a>`
                     : live ? ''
                     : `<button class="btn btn-primary btn-sm" onclick="createPreview('${escapeHtml(owner)}/${escapeHtml(repo)}', ${p.number}, this)">${status === 'failed' ? 'Retry preview' : 'Create preview'}</button>`;
+                const check = `<button class="btn btn-ghost btn-sm" onclick="checkPull('${escapeHtml(owner)}/${escapeHtml(repo)}', ${p.number})">Check this PR</button>`;
                 return `<tr>
                     <td>#${p.number}</td>
                     <td>${escapeHtml(p.title)}</td>
                     <td class="text-muted">${escapeHtml(p.author_login)}</td>
                     <td>${status ? statusBadge(status) : '<span class="text-muted">none</span>'}</td>
-                    <td style="text-align:right;">${action}</td>
+                    <td style="text-align:right;white-space:nowrap;">${check} ${action}</td>
                 </tr>`;
             }).join('')}</tbody></table>`;
     } catch (e) {
@@ -499,12 +541,15 @@ async function createPreview(fullName, prNumber, button) {
 }
 
 function renderOverview() {
-    const active = cachedEnvironments.filter(e => ['ready', 'provisioning', 'pending', 'updating'].includes((e.status || '').toLowerCase()));
-
-    document.getElementById('statTotalEnvs').textContent = cachedEnvironments.length;
-    document.getElementById('statActiveEnvs').textContent = active.length;
-    document.getElementById('statCredentials').textContent = cachedCredentials.length;
-    document.getElementById('statTokens').textContent = cachedTokens.length;
+    // What a user wants to know at a glance: what they can open, what is on
+    // its way, what needs them, and whether their repositories are connected.
+    const count = statuses => cachedEnvironments.filter(e => statuses.includes((e.status || '').toLowerCase())).length;
+    const attention = count(['failed']);
+    document.getElementById('statReady').textContent = count(['ready']);
+    document.getElementById('statDeploying').textContent = count(['pending', 'provisioning', 'updating']);
+    document.getElementById('statAttention').textContent = attention;
+    document.getElementById('statAttention').parentElement.classList.toggle('stat-attention', attention > 0);
+    document.getElementById('statRepos').textContent = Array.isArray(cachedRepositories) ? cachedRepositories.length : '-';
 
     renderGettingStarted();
 
@@ -641,8 +686,6 @@ async function addCredential() {
         showToast('Credentials added successfully');
         await loadCredentials();
         renderCredentials();
-        // Update overview stat
-        document.getElementById('statCredentials').textContent = cachedCredentials.length;
     } catch (e) {
         showToast('Failed to add credentials: ' + e.message, 'error');
     }
@@ -656,7 +699,6 @@ async function deleteCredential(id) {
         showToast('Credential deleted');
         await loadCredentials();
         renderCredentials();
-        document.getElementById('statCredentials').textContent = cachedCredentials.length;
     } catch (e) {
         showToast('Failed to delete credential: ' + e.message, 'error');
     }
@@ -690,7 +732,6 @@ async function generateToken() {
 
         await loadTokens();
         renderTokens();
-        document.getElementById('statTokens').textContent = cachedTokens.length;
     } catch (e) {
         showToast('Failed to generate token: ' + e.message, 'error');
     }
@@ -704,7 +745,6 @@ async function revokeToken(id) {
         showToast('Token revoked');
         await loadTokens();
         renderTokens();
-        document.getElementById('statTokens').textContent = cachedTokens.length;
     } catch (e) {
         showToast('Failed to revoke token: ' + e.message, 'error');
     }
