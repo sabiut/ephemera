@@ -662,6 +662,10 @@ async function runSetupCheck(owner, repo, prNumber = null) {
         const checks = [...r.checks].sort((a, b) => order[a.level] - order[b.level]);
         // Configuration only: whether CI published the image and the cluster
         // can pull it is only known once a preview deploys.
+        const guideButton = r.needs_image_setup
+            ? `<p style="margin:0 20px 16px;"><button class="btn btn-primary btn-sm" onclick="openSetupGuide('${escapeHtml(owner)}', '${escapeHtml(repo)}'${prNumber ? `, ${prNumber}` : ''})">Set up image builds</button>
+               <span class="text-muted text-sm">Generates the CI workflow and compose lines for this repository.</span></p>`
+            : '';
         const verdict = r.ready
             ? `<p class="notice" style="margin:16px 20px;"><strong>Configuration checks passed.</strong> Image availability is verified when a preview deploys: CI must push each image before Ephemera can start it. Open a pull request, or create a preview below.${back}</p>`
             : `<p class="notice" style="margin:16px 20px;"><strong>Fix the errors below before previews can work.</strong> Warnings will not stop a preview but may make it behave differently from docker compose.${back}</p>`;
@@ -673,7 +677,7 @@ async function runSetupCheck(owner, repo, prNumber = null) {
                 <td>${s.commit_image ? 'configured' : '<span class="text-muted">no</span>'}</td>
                 <td>${s.public ? (s.primary ? '<strong>Open preview</strong>' : 'yes') : '<span class="text-muted">-</span>'}</td>
             </tr>`).join('')}</tbody></table>` : '';
-        body.innerHTML = verdict + checks.map(c => `
+        body.innerHTML = verdict + guideButton + checks.map(c => `
             <div class="check check-${c.level}">
                 <span class="check-icon">${icon[c.level]}</span>
                 <div>
@@ -685,6 +689,76 @@ async function runSetupCheck(owner, repo, prNumber = null) {
     } catch (e) {
         body.innerHTML = `<div class="empty-state"><p><strong>Setup check failed.</strong> ${escapeHtml(e.message)}</p></div>`;
     }
+}
+
+// ─── Image setup guide ──────────────────────────────────
+
+let guideTexts = {};
+
+async function openSetupGuide(owner, repo, prNumber = null) {
+    const body = document.getElementById('guideBody');
+    document.getElementById('guideTitle').textContent = `Set up image builds: ${owner}/${repo}`;
+    body.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+    openModal('guideModal');
+    try {
+        const g = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/setup-guide${prNumber ? `?pr=${prNumber}` : ''}`);
+        renderSetupGuide(g);
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p><strong>Could not generate the setup.</strong> ${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+function codeBlock(key, text) {
+    guideTexts[key] = text;
+    return `<div class="code-block"><button class="btn btn-ghost btn-sm copy" onclick="copyGuide('${key}', this)">Copy</button><pre>${escapeHtml(text)}</pre></div>`;
+}
+
+function renderSetupGuide(g) {
+    const body = document.getElementById('guideBody');
+    guideTexts = {};
+    if (g.status !== 'needs_setup') {
+        body.innerHTML = `<p style="color:#bbb;">${richText(g.message)}</p>`;
+        return;
+    }
+    const services = g.services.map(s => `<code>${escapeHtml(s.name)}</code>`).join(', ');
+    body.innerHTML = `
+        <p style="color:#bbb;margin-top:0;">${richText(g.message)} Ephemera runs images; it doesn't build them. These changes make your CI build ${services} for every commit, so each preview runs that commit's code.</p>
+        <div class="guide-step">
+            <h3><span class="num">1</span>Add this workflow</h3>
+            <p>Create <span class="code-path">${escapeHtml(g.workflow_path)}</span> with:</p>
+            ${codeBlock('workflow', g.workflow)}
+        </div>
+        <div class="guide-step">
+            <h3><span class="num">2</span>Point docker-compose.yml at the images</h3>
+            <p>Add the <code>image:</code> line to each service below. Ephemera replaces <code>\${EPHEMERA_SHA}</code> with the pull request's commit.</p>
+            ${codeBlock('compose', g.compose_snippet)}
+        </div>
+        <div class="guide-step">
+            <h3><span class="num">3</span>Make the images public</h3>
+            <ol>${g.registry_steps.map(step => `<li>${richText(step)}</li>`).join('')}</ol>
+            <p class="text-sm"><a href="${escapeHtml(g.docs_url)}" target="_blank" style="color:#6366f1;">GitHub's guide to package visibility</a></p>
+        </div>
+        ${g.notes.map(n => `<div class="guide-note">${richText(n)}</div>`).join('')}`;
+}
+
+async function copyGuide(key, button) {
+    const text = guideTexts[key] || '';
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch (e) {
+        // Clipboard API blocked (e.g. not a secure context): select the text instead.
+        const pre = button.parentElement.querySelector('pre');
+        const range = document.createRange();
+        range.selectNodeContents(pre);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        showToast('Selected. Press Ctrl+C (or Cmd+C) to copy.');
+        return;
+    }
+    const old = button.textContent;
+    button.textContent = 'Copied';
+    setTimeout(() => { button.textContent = old; }, 1500);
 }
 
 async function loadPulls(owner, repo) {

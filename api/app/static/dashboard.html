@@ -467,6 +467,16 @@
         .step-detail { font-size: 13px; color: #999; font-weight: 400; margin-top: 2px; }
         @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.5); } 50% { box-shadow: 0 0 0 5px rgba(99, 102, 241, 0); } }
         @media (prefers-reduced-motion: reduce) { .stepper .step-current .dot { animation: none; } }
+        .guide-step { margin-bottom: 22px; }
+        .guide-step h3 { font-size: 15px; color: #fff; margin: 0 0 6px; display: flex; gap: 10px; align-items: baseline; }
+        .guide-step h3 .num { color: #6366f1; font-weight: 700; }
+        .guide-step p, .guide-step li { color: #bbb; font-size: 14px; line-height: 1.5; }
+        .guide-step ol { margin: 6px 0 0 18px; padding: 0; }
+        .code-block { position: relative; margin-top: 8px; }
+        .code-block pre { background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 12px; font-size: 12px; color: #d4d4d4; max-height: 320px; overflow: auto; white-space: pre; }
+        .code-block .copy { position: absolute; top: 8px; right: 8px; }
+        .code-path { font-family: ui-monospace, monospace; font-size: 13px; color: #a5b4fc; }
+        .guide-note { border-left: 3px solid #eab308; background: #1a1708; padding: 10px 12px; border-radius: 6px; color: #d6c88a; font-size: 13px; margin-top: 10px; }
         .row-link { color: #fca5a5; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
         .modal-header {
@@ -968,6 +978,18 @@
     </div>
 
     <!-- New Token Display Modal -->
+    <!-- Image setup guide: CI workflow, compose lines, registry access -->
+    <div class="modal-overlay" id="guideModal">
+        <div class="modal modal-wide">
+            <div class="modal-header">
+                <span class="modal-title" id="guideTitle">Set up image builds</span>
+                <button class="modal-close" onclick="closeModal('guideModal')" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" id="guideBody"></div>
+            <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('guideModal')">Close</button></div>
+        </div>
+    </div>
+
     <!-- Environment details: what happened, what to do, retry, history -->
     <div class="modal-overlay" id="envDetailModal">
         <div class="modal modal-wide">
