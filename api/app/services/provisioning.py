@@ -48,6 +48,9 @@ def request_environment(db: Session, req: EnvironmentRequest) -> Tuple[Environme
     existing = environment_crud.get_environment_by_pr(db, req.repository_full_name, req.pr_number)
 
     if existing and (existing.is_active or existing.status == EnvironmentStatus.PENDING):
+        if existing.closed_at is not None:
+            # Reopened before the teardown ran: it will see this and stand down.
+            environment_crud.mark_reopened(db, existing)
         logger.info(f"Environment {existing.namespace} already live for PR #{req.pr_number}")
         return existing, "exists"
 

@@ -68,10 +68,14 @@ class Settings(BaseSettings):
     # before leaving it as DESTROYING for the hourly cleanup to confirm.
     preview_destroy_confirm_seconds: int = 180
     # One task changes a preview at a time. The lock outlives the Celery
-    # hard limit (30 min) only slightly, so a killed worker cannot wedge it;
-    # waiting tasks give up well before their own soft limit.
+    # hard limit (30 min) only slightly, so a killed worker cannot wedge it.
+    # A task that cannot take the lock waits briefly, then is rescheduled
+    # rather than holding a worker: every RETRY seconds, up to MAX_RETRIES
+    # times (about an hour and a half with the defaults).
     environment_lock_seconds: int = 1860
-    environment_lock_wait_seconds: int = 900
+    environment_lock_wait_seconds: int = 30
+    environment_lock_retry_seconds: int = 60
+    environment_lock_max_retries: int = 60
 
     # Preview namespace quotas
     preview_cpu_quota: str = "1"

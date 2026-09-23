@@ -101,6 +101,9 @@ def handle_pull_request_closed(payload: PullRequestWebhook):
         if not environment:
             logger.warning(f"No environment found for PR #{pr.number}, skipping cleanup")
             return
+        # Recorded first and always, even for a DESTROYED preview: a deploy
+        # still queued behind the lock checks it and stands down.
+        environment_crud.mark_closed(db, environment)
         # Anything but DESTROYED is torn down: a FAILED preview usually still
         # has a namespace full of crash-looping pods, and a DESTROYING one may
         # have had its first deletion attempt fail.

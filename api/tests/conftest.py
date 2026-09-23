@@ -30,6 +30,25 @@ import app.models  # noqa: E402,F401
 from app.models import APIToken, User  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def held_environment_lock(monkeypatch):
+    """
+    Tasks take a Redis lock, and the lock no longer fails open, so tests that
+    run a task hold it by default. Lock behaviour is tested on its own in
+    test_concurrent_deploys.py.
+    """
+    from contextlib import contextmanager
+
+    import app.core.locks as locks
+    import app.tasks.environment as env_tasks
+
+    @contextmanager
+    def held(environment_id):
+        yield locks.HELD
+
+    monkeypatch.setattr(env_tasks, "environment_lock", held)
+
+
 @pytest.fixture()
 def db_session():
     engine = create_engine(

@@ -6,9 +6,9 @@ tasks could apply manifests to the same namespace at once, and an older
 commit's task could finish last and overwrite the newer result. Redis is
 already the Celery broker, so the lock lives there.
 
-If Redis cannot be reached the lock fails open with a warning: the broker
-being down means no tasks run anyway, and a lock error must not turn a
-routine deploy into a failure.
+The lock never fails open. A worker can already hold a task when Redis
+drops, so "no broker, no tasks" does not hold; a task that cannot establish
+the lock reports it and is retried later without touching the cluster.
 """
 
 import logging
@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 _client: Optional["redis.Redis"] = None
 
+HELD = "held"                # this task holds the lock
+BUSY = "busy"                # another task held it for the whole wait
+UNAVAILABLE = "unavailable"  # Redis could not be reached
+
 
 def _redis() -> "redis.Redis":
     global _client
@@ -36,11 +40,11 @@ def _redis() -> "redis.Redis":
 
 
 @contextmanager
-def environment_lock(environment_id: int) -> Iterator[bool]:
+def environment_lock(environment_id: int) -> Iterator[str]:
     """
-    Hold the environment's lock for the duration of the block. Yields True
-    when held (or when Redis is unreachable, failing open) and False if it
-    could not be acquired within ENVIRONMENT_LOCK_WAIT_SECONDS.
+    Hold the environment's lock for the duration of the block. Yields HELD,
+    BUSY (not acquired within ENVIRONMENT_LOCK_WAIT_SECONDS) or UNAVAILABLE
+    (Redis error). Only HELD permits changing the preview.
     """
     name = f"ephemera:environment-lock:{environment_id}"
     try:
@@ -51,14 +55,14 @@ def environment_lock(environment_id: int) -> Iterator[bool]:
         )
         acquired = lock.acquire()
     except redis.RedisError as e:
-        logger.warning(f"Environment lock unavailable ({e}); continuing without it")
-        yield True
+        logger.warning(f"Environment lock unavailable ({e})")
+        yield UNAVAILABLE
         return
     if not acquired:
-        yield False
+        yield BUSY
         return
     try:
-        yield True
+        yield HELD
     finally:
         try:
             lock.release()

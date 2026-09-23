@@ -29,6 +29,10 @@ COMPOSE_FILENAMES = (
 # Annotation stamped on every pod template so re-applying the same manifests
 # for a new commit still triggers a rollout (and a fresh image pull).
 REVISION_ANNOTATION = "ephemera.io/revision"
+MANAGED_LABEL, MANAGED_VALUE = "managed-by", "ephemera"
+PREVIEW_NAMESPACE_PREFIX = "pr-"
+# Ingresses first, so a route disappears before the service behind it.
+PRUNABLE_KINDS = ("Ingress", "Service", "Deployment")
 
 DEFAULT_RESOURCES = {
     "requests": {"cpu": "100m", "memory": "128Mi"},
@@ -387,6 +391,11 @@ class DeploymentService:
         namespace = metadata.get("namespace")
         name = metadata.get("name")
 
+        # Every object Ephemera applies carries its label, which is how a later
+        # deploy finds the ones it no longer wants (see prune_obsolete).
+        if kind in PRUNABLE_KINDS:
+            metadata.setdefault("labels", {}).setdefault(MANAGED_LABEL, MANAGED_VALUE)
+
         if kind == "Deployment" and revision:
             template_meta = manifest.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {})
             template_meta.setdefault("annotations", {})[REVISION_ANNOTATION] = revision
@@ -461,7 +470,59 @@ class DeploymentService:
                         service_urls[service_name] = f"https://{host}"
                         break
 
+        namespaces = {m.get("metadata", {}).get("namespace") for m in manifests}
+        if len(namespaces) == 1 and None not in namespaces:
+            failed += self.prune_obsolete(namespaces.pop(), manifests)
+
         return applied, failed, service_urls
+
+    def prune_obsolete(self, namespace: str, manifests: List[Dict[str, Any]]) -> List[str]:
+        """
+        Delete Ephemera-managed Deployments, Services and Ingresses in the
+        namespace that the new manifests no longer contain: a service made
+        internal must lose its public route, and one removed from compose must
+        stop running. Applying alone only ever creates or updates.
+
+        Returns "Kind/name" for each obsolete object that could not be removed,
+        so the deploy is reported as failed rather than leaving a stale route
+        live. Only preview namespaces are touched, and only labelled objects.
+        """
+        if not self.k8s.enabled or not namespace.startswith(PREVIEW_NAMESPACE_PREFIX) or not manifests:
+            return []
+        wanted = {(m.get("kind"), m.get("metadata", {}).get("name")) for m in manifests}
+        selector = f"{MANAGED_LABEL}={MANAGED_VALUE}"
+        apis = {
+            "Ingress": (self.k8s.networking_v1.list_namespaced_ingress,
+                        self.k8s.networking_v1.delete_namespaced_ingress),
+            "Service": (self.k8s.core_v1.list_namespaced_service,
+                        self.k8s.core_v1.delete_namespaced_service),
+            "Deployment": (self.k8s.apps_v1.list_namespaced_deployment,
+                           self.k8s.apps_v1.delete_namespaced_deployment),
+        }
+        not_removed: List[str] = []
+        for kind in PRUNABLE_KINDS:
+            list_fn, delete_fn = apis[kind]
+            try:
+                existing = [item.metadata.name for item in list_fn(namespace=namespace, label_selector=selector).items]
+            except Exception as e:
+                logger.error(f"Could not list {kind}s in {namespace} to remove obsolete ones: {e}")
+                not_removed.append(f"{kind}/* (could not check for obsolete objects)")
+                continue
+            for name in existing:
+                if (kind, name) in wanted:
+                    continue
+                try:
+                    delete_fn(name=name, namespace=namespace)
+                    logger.info(f"Removed obsolete {kind} {name} from {namespace}")
+                except ApiException as e:
+                    if e.status == 404:
+                        continue
+                    logger.error(f"Could not remove obsolete {kind} {name} from {namespace}: {e}")
+                    not_removed.append(f"{kind}/{name} (obsolete, not removed)")
+                except Exception as e:
+                    logger.error(f"Could not remove obsolete {kind} {name} from {namespace}: {e}")
+                    not_removed.append(f"{kind}/{name} (obsolete, not removed)")
+        return not_removed
 
     def deploy_application(
         self,

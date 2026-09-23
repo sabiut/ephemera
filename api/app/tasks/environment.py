@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.celery_app import celery_app
-from app.core.locks import environment_lock
+from app.core.locks import HELD, environment_lock
 from app.crud import deployment as deployment_crud
 from app.crud import environment as environment_crud
 from app.database import SessionLocal
@@ -69,11 +69,14 @@ def _superseded_by(db: Session, environment_id: int, commit_sha: str) -> Optiona
 
 
 def _mark_superseded(db: Session, deployment_id: Optional[int], newer: str) -> None:
+    _mark_stood_down(db, deployment_id, f"Superseded by newer commit {newer[:7]}")
+
+
+def _mark_stood_down(db: Session, deployment_id: Optional[int], reason: str) -> None:
+    """Close this task's own deployment record without touching the preview."""
     record = deployment_crud.get_deployment_by_id(db, deployment_id) if deployment_id else None
     if record:
-        deployment_crud.update_deployment_status(
-            db, record, DeploymentStatus.FAILED, error_message=f"Superseded by newer commit {newer[:7]}"
-        )
+        deployment_crud.update_deployment_status(db, record, DeploymentStatus.FAILED, error_message=reason)
 
 
 def _run_deployment(
@@ -508,8 +511,10 @@ Fix the cause and push a new commit; Ephemera will try again from scratch.{FOOTE
 
 # --------------------------------------------------------------------------
 # Celery tasks. Each takes the environment's lock so only one task changes a
-# preview at a time, and a task whose commit is no longer the PR's latest
-# records itself as superseded and exits without touching the preview.
+# preview at a time. Under the lock a task first checks that it still matches
+# the PR: a deploy stands down if the PR has closed or its commit has been
+# overtaken, and a teardown stands down if the PR has been reopened since.
+# A task that cannot take the lock is rescheduled, never dropped.
 
 @celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.provision_environment")
 def provision_environment(self, environment_id: int, installation_id: Optional[int] = None,
@@ -517,7 +522,8 @@ def provision_environment(self, environment_id: int, installation_id: Optional[i
                           commit_sha: Optional[str] = None, deployment_id: Optional[int] = None):
     """Create the preview's namespace and deploy the PR's compose services into it."""
     return _locked(self, environment_id, commit_sha, deployment_id, lambda: _provision_body(
-        self, environment_id, installation_id, repo_full_name, pr_number, commit_sha, deployment_id))
+        self, environment_id, installation_id, repo_full_name, pr_number, commit_sha, deployment_id),
+        notify=(installation_id, repo_full_name, pr_number))
 
 
 @celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.update_environment")
@@ -526,23 +532,34 @@ def update_environment(self, environment_id: int, commit_sha: str, installation_
                        deployment_id: Optional[int] = None):
     """Redeploy an existing preview at a new commit."""
     return _locked(self, environment_id, commit_sha, deployment_id, lambda: _update_body(
-        self, environment_id, commit_sha, installation_id, repo_full_name, pr_number, deployment_id))
+        self, environment_id, commit_sha, installation_id, repo_full_name, pr_number, deployment_id),
+        notify=(installation_id, repo_full_name, pr_number))
 
 
 @celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.destroy_environment")
 def destroy_environment(self, environment_id: int, installation_id: Optional[int] = None,
                         repo_full_name: Optional[str] = None, pr_number: Optional[int] = None,
                         pr_merged: bool = False):
-    """Delete the preview's namespace. Never superseded: closing always wins."""
+    """Delete the preview's namespace. Never superseded by a commit: closing always wins."""
     return _locked(self, environment_id, None, None, lambda: _destroy_body(
-        self, environment_id, installation_id, repo_full_name, pr_number, pr_merged))
+        self, environment_id, installation_id, repo_full_name, pr_number, pr_merged), teardown=True)
 
 
-def _locked(task, environment_id: int, commit_sha: Optional[str], deployment_id: Optional[int], run):
-    with environment_lock(environment_id) as held:
-        if not held:
-            logger.error(f"Timed out waiting for environment {environment_id}'s lock")
-            return {"success": False, "environment_id": environment_id, "error": "environment busy"}
+def _locked(task, environment_id: int, commit_sha: Optional[str], deployment_id: Optional[int], run,
+            teardown: bool = False, notify=(None, None, None)):
+    with environment_lock(environment_id) as state:
+        if state != HELD:
+            return _reschedule(task, environment_id, commit_sha, deployment_id, state, teardown, notify)
+        environment = environment_crud.get_environment(task.db, environment_id)
+        if environment is not None:
+            task.db.refresh(environment)
+            if teardown and environment.closed_at is None:
+                logger.info(f"Environment {environment_id}'s PR was reopened; skipping teardown")
+                return {"success": False, "environment_id": environment_id, "skipped": "pull request reopened"}
+            if not teardown and environment.closed_at is not None:
+                _mark_stood_down(task.db, deployment_id, "Pull request closed before this deployment ran")
+                logger.info(f"Environment {environment_id}'s PR is closed; not deploying")
+                return {"success": False, "environment_id": environment_id, "skipped": "pull request closed"}
         if commit_sha:
             newer = _superseded_by(task.db, environment_id, commit_sha)
             if newer:
@@ -550,3 +567,57 @@ def _locked(task, environment_id: int, commit_sha: Optional[str], deployment_id:
                 logger.info(f"Skipping {commit_sha[:7]} for environment {environment_id}: {newer[:7]} is newer")
                 return {"success": False, "environment_id": environment_id, "superseded_by": newer}
         return run()
+
+
+def _retries_so_far(task) -> int:
+    return task.request.retries or 0
+
+
+def _reschedule(task, environment_id: int, commit_sha: Optional[str], deployment_id: Optional[int],
+                state: str, teardown: bool, notify):
+    """
+    Try again later when the lock is busy or Redis is unreachable. Nothing in
+    the cluster has been touched. Once the retries run out the request is
+    recorded as failed rather than silently discarded.
+    """
+    retries = _retries_so_far(task)
+    if retries < settings.environment_lock_max_retries:
+        logger.warning(f"Environment {environment_id} lock {state}; retrying in "
+                       f"{settings.environment_lock_retry_seconds}s (attempt {retries + 1})")
+        raise task.retry(countdown=settings.environment_lock_retry_seconds,
+                         max_retries=settings.environment_lock_max_retries)
+
+    minutes = (settings.environment_lock_max_retries * settings.environment_lock_retry_seconds) // 60
+    message = (f"Gave up after about {minutes} minutes: timed out waiting for exclusive access to the "
+               f"preview (lock {state}; another deployment held it or Redis was unreachable)")
+    logger.error(f"Environment {environment_id}: {message}")
+    environment = environment_crud.get_environment(task.db, environment_id)
+    if environment is None:
+        return {"success": False, "environment_id": environment_id, "error": message}
+    task.db.refresh(environment)
+
+    if teardown:
+        # DESTROYING is picked up by the hourly cleanup, which deletes the
+        # namespace and confirms it is gone.
+        if environment.closed_at is not None and environment.status != EnvironmentStatus.DESTROYED:
+            environment_crud.update_environment_status(
+                task.db, environment, EnvironmentStatus.DESTROYING, error_message=message)
+        return {"success": False, "environment_id": environment_id, "error": message}
+
+    _mark_stood_down(task.db, deployment_id, message)
+    # Only fail the preview if this request is still what the PR wants.
+    if environment.closed_at is None and not (commit_sha and _superseded_by(task.db, environment_id, commit_sha)):
+        environment_crud.update_environment_status(
+            task.db, environment, EnvironmentStatus.FAILED, error_message=message)
+        installation_id, repo_full_name, pr_number = notify
+        comment = f"""## Ephemera Environment Failed
+
+**Namespace**: `{environment.namespace}`
+**Status**: Failed
+**Error**: {message}
+
+Push a new commit to try again.{FOOTER}"""
+        _notify(installation_id or environment.installation_id, repo_full_name or environment.repository_full_name,
+                pr_number or environment.pr_number, commit_sha or environment.commit_sha,
+                "failure", "Timed out waiting to deploy", comment)
+    return {"success": False, "environment_id": environment_id, "error": message}
