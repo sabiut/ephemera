@@ -114,7 +114,9 @@ def _run_retry():
 def test_transient_failure_is_retried_exactly_once(task_db, queued, user):
     env = _failed_env(task_db, user, 1, "Preview URLs did not answer: web (HTTP 503)")
     first = _run_retry()
-    assert first["retried"] == [env.id] and queued == [{"environment_id": env.id}]
+    assert first["retried"] == [env.id]
+    assert [q["environment_id"] for q in queued] == [env.id]
+    assert queued[0]["commit_sha"] == env.commit_sha and queued[0]["deployment_id"]
     assert task_db.query(Deployment).filter_by(environment_id=env.id).count() == 2
 
     second = _run_retry()  # still FAILED, but this commit already had its retry

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.celery_app import celery_app
+from app.core.locks import environment_lock
 from app.crud import deployment as deployment_crud
 from app.crud import environment as environment_crud
 from app.database import SessionLocal
@@ -56,6 +57,25 @@ def _active_deployment_service():
     return deployment_service
 
 
+def _superseded_by(db: Session, environment_id: int, commit_sha: str) -> Optional[str]:
+    """The newer commit this task has been overtaken by, or None."""
+    environment = environment_crud.get_environment(db, environment_id)
+    if environment is None:
+        return None
+    db.refresh(environment)
+    if environment.commit_sha and environment.commit_sha != commit_sha:
+        return environment.commit_sha
+    return None
+
+
+def _mark_superseded(db: Session, deployment_id: Optional[int], newer: str) -> None:
+    record = deployment_crud.get_deployment_by_id(db, deployment_id) if deployment_id else None
+    if record:
+        deployment_crud.update_deployment_status(
+            db, record, DeploymentStatus.FAILED, error_message=f"Superseded by newer commit {newer[:7]}"
+        )
+
+
 def _run_deployment(
     db: Session,
     environment_id: int,
@@ -63,9 +83,17 @@ def _run_deployment(
     repo_full_name: str,
     namespace: str,
     commit_sha: str,
+    deployment_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Deploy the repo at ``commit_sha`` into ``namespace`` and record the result."""
-    latest = deployment_crud.get_latest_deployment(db, environment_id)
+    """
+    Deploy the repo at ``commit_sha`` into ``namespace`` and record the
+    result on this task's own deployment record (``deployment_id``). Taking
+    "the latest record" instead let an older commit's task write its result
+    onto a newer commit's record.
+    """
+    latest = deployment_crud.get_deployment_by_id(db, deployment_id) if deployment_id else None
+    if latest is None:
+        latest = deployment_crud.get_latest_deployment(db, environment_id)  # tasks queued before this change
     if latest:
         deployment_crud.update_deployment_status(db, latest, DeploymentStatus.IN_PROGRESS)
 
@@ -134,6 +162,12 @@ def _run_deployment(
                     )
 
     result["commit_sha"] = commit_sha
+    newer = _superseded_by(db, environment_id, commit_sha)
+    if newer:
+        _mark_superseded(db, latest.id if latest else None, newer)
+        result["superseded_by"] = newer
+        logger.info(f"Deployment of {commit_sha[:7]} superseded by {newer[:7]} while it ran")
+        return result
     if not result.get("success") and not result.get("error"):
         result["error"] = "Application deployment failed without a reported reason"
 
@@ -231,14 +265,14 @@ def _notify(
         github_service.post_comment_to_pr(installation_id, repo_full_name, pr_number, comment)
 
 
-@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.provision_environment")
-def provision_environment(
+def _provision_body(
     self,
     environment_id: int,
     installation_id: Optional[int] = None,
     repo_full_name: Optional[str] = None,
     pr_number: Optional[int] = None,
-    commit_sha: Optional[str] = None
+    commit_sha: Optional[str] = None,
+    deployment_id: Optional[int] = None,
 ):
     """
     Provision a new environment: create the namespace and quota, then deploy
@@ -277,8 +311,13 @@ def provision_environment(
         )
 
         result = _run_deployment(
-            self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha
+            self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha,
+            deployment_id=deployment_id,
         )
+        if result.get("superseded_by"):
+            # A newer push owns this preview now; its task will set the status
+            # and comment. Leave both alone.
+            return {"success": False, "environment_id": environment_id, "superseded_by": result["superseded_by"]}
 
         if not result.get("success"):
             raise RuntimeError(result.get("error") or "Application deployment failed")
@@ -322,8 +361,7 @@ Fix the cause and push a new commit; Ephemera will try again from scratch.{FOOTE
         return {"success": False, "environment_id": environment_id, "error": str(e)}
 
 
-@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.destroy_environment")
-def destroy_environment(
+def _destroy_body(
     self,
     environment_id: int,
     installation_id: Optional[int] = None,
@@ -387,14 +425,14 @@ PR was {action}. Preview environment has been destroyed.
         return {"success": False, "environment_id": environment_id, "error": str(e)}
 
 
-@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.update_environment")
-def update_environment(
+def _update_body(
     self,
     environment_id: int,
     commit_sha: str,
     installation_id: Optional[int] = None,
     repo_full_name: Optional[str] = None,
-    pr_number: Optional[int] = None
+    pr_number: Optional[int] = None,
+    deployment_id: Optional[int] = None,
 ):
     """Redeploy an existing environment at a new commit."""
     logger.info(f"Updating environment {environment_id} for commit {commit_sha}")
@@ -414,8 +452,13 @@ def update_environment(
             raise RuntimeError(f"Namespace {environment.namespace} no longer exists")
 
         result = _run_deployment(
-            self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha
+            self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha,
+            deployment_id=deployment_id,
         )
+        if result.get("superseded_by"):
+            # A newer push owns this preview now; its task will set the status
+            # and comment. Leave both alone.
+            return {"success": False, "environment_id": environment_id, "superseded_by": result["superseded_by"]}
         if not result.get("success"):
             raise RuntimeError(result.get("error") or "Application deployment failed")
 
@@ -455,3 +498,48 @@ Fix the cause and push a new commit; Ephemera will try again from scratch.{FOOTE
         _notify(installation_id, repo_full_name, pr_number, commit_sha,
                 "failure", "Failed to update environment", comment)
         return {"success": False, "environment_id": environment_id, "error": str(e)}
+
+# --------------------------------------------------------------------------
+# Celery tasks. Each takes the environment's lock so only one task changes a
+# preview at a time, and a task whose commit is no longer the PR's latest
+# records itself as superseded and exits without touching the preview.
+
+@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.provision_environment")
+def provision_environment(self, environment_id: int, installation_id: Optional[int] = None,
+                          repo_full_name: Optional[str] = None, pr_number: Optional[int] = None,
+                          commit_sha: Optional[str] = None, deployment_id: Optional[int] = None):
+    """Create the preview's namespace and deploy the PR's compose services into it."""
+    return _locked(self, environment_id, commit_sha, deployment_id, lambda: _provision_body(
+        self, environment_id, installation_id, repo_full_name, pr_number, commit_sha, deployment_id))
+
+
+@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.update_environment")
+def update_environment(self, environment_id: int, commit_sha: str, installation_id: Optional[int] = None,
+                       repo_full_name: Optional[str] = None, pr_number: Optional[int] = None,
+                       deployment_id: Optional[int] = None):
+    """Redeploy an existing preview at a new commit."""
+    return _locked(self, environment_id, commit_sha, deployment_id, lambda: _update_body(
+        self, environment_id, commit_sha, installation_id, repo_full_name, pr_number, deployment_id))
+
+
+@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.destroy_environment")
+def destroy_environment(self, environment_id: int, installation_id: Optional[int] = None,
+                        repo_full_name: Optional[str] = None, pr_number: Optional[int] = None,
+                        pr_merged: bool = False):
+    """Delete the preview's namespace. Never superseded: closing always wins."""
+    return _locked(self, environment_id, None, None, lambda: _destroy_body(
+        self, environment_id, installation_id, repo_full_name, pr_number, pr_merged))
+
+
+def _locked(task, environment_id: int, commit_sha: Optional[str], deployment_id: Optional[int], run):
+    with environment_lock(environment_id) as held:
+        if not held:
+            logger.error(f"Timed out waiting for environment {environment_id}'s lock")
+            return {"success": False, "environment_id": environment_id, "error": "environment busy"}
+        if commit_sha:
+            newer = _superseded_by(task.db, environment_id, commit_sha)
+            if newer:
+                _mark_superseded(task.db, deployment_id, newer)
+                logger.info(f"Skipping {commit_sha[:7]} for environment {environment_id}: {newer[:7]} is newer")
+                return {"success": False, "environment_id": environment_id, "superseded_by": newer}
+        return run()

@@ -90,6 +90,7 @@ def request_environment(db: Session, req: EnvironmentRequest) -> Tuple[Environme
         repo_full_name=req.repository_full_name,
         pr_number=req.pr_number,
         commit_sha=req.commit_sha,
+        deployment_id=deployment.id,
     )
 
     return environment, action
