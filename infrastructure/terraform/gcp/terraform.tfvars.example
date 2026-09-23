@@ -8,7 +8,7 @@ owner       = "your-name"
 
 # GKE Configuration
 cluster_version        = "1.28"
-node_machine_type      = "e2-small"        # 2 vCPU, 2GB RAM - cost optimized
+node_machine_type      = "e2-medium"       # 2 shared vCPU (1 sustained), 4GB RAM; e2-small starved cluster DNS
 node_disk_size_gb      = 30
 node_min_count         = 1                 # Minimum nodes per zone
 node_max_count         = 3                 # Maximum nodes per zone
@@ -24,18 +24,19 @@ redis_tier      = "BASIC"  # Single node, no replication
 redis_memory_gb = 1        # Minimum size
 
 # Cost Optimization Notes:
-# - e2-small nodes: ~$0.03/hour = ~$22/month per node
+# - e2-medium nodes: roughly twice an e2-small; preemptible cuts either by up to 80%
 # - db-f1-micro: Free tier eligible (up to 1 instance)
 # - Preemptible nodes: Save up to 80% on compute costs
 # - BASIC Redis tier: Single node, cheaper than STANDARD_HA
 # - us-central1 region: One of the cheapest GCP regions
 #
-# Estimated monthly cost (1 node, preemptible):
-# - GKE nodes (1 x e2-small preemptible): ~$5/month
+# Estimated monthly cost (preemptible; node_min_count is per zone, so a
+# regional cluster runs at least 3 nodes):
+# - GKE nodes (3 x e2-medium preemptible): ~$30/month
 # - Cloud SQL (db-f1-micro): FREE (free tier)
 # - Memorystore (1GB BASIC): ~$26/month
 # - Networking: ~$5/month
-# Total: ~$36/month
+# Total: ~$61/month
 #
 # For testing (4 hours):
 # - GKE: ~$0.01
