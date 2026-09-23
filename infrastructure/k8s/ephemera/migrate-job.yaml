@@ -1,0 +1,44 @@
+# Runs the database migrations with the image about to be rolled out, before
+# the API and workers are updated, so new code never queries a column the
+# schema does not have yet. Migrations must stay additive (old code keeps
+# running against the new schema until its pods are replaced).
+#
+# Applied by .github/workflows/deploy.yml, which substitutes the commit tag
+# for ":latest" and deletes the previous run's Job first.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ephemera-migrate
+  namespace: ephemera-system
+  labels:
+    app: ephemera
+    component: migrate
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ephemera
+        component: migrate
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate
+        image: us-central1-docker.pkg.dev/ephemera-dev-2025/ephemera/ephemera-api:latest
+        imagePullPolicy: Always
+        command: ["alembic", "upgrade", "head"]
+        # The same settings the API reads; app.config validates them on import.
+        envFrom:
+        - configMapRef:
+            name: ephemera-config
+        - secretRef:
+            name: ephemera-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

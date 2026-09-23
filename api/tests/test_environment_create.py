@@ -181,3 +181,31 @@ def test_repository_and_pr_number_are_the_only_required_fields(client, auth_head
     github.collaborator = True
     assert client.post("/api/v1/environments/", json={"repository_full_name": REPO}, headers=auth_headers).status_code == 422
     assert client.post("/api/v1/environments/", json=BODY, headers=auth_headers).status_code == 202
+
+
+@pytest.mark.parametrize("state", ["closed"])  # GitHub reports merged PRs as closed too
+def test_a_closed_pull_request_gets_no_preview(client, auth_headers, github, captured_request, state):
+    # The review's reproduction: the API cleared the closed marker and queued
+    # provisioning for a closed PR, bypassing the worker's guard.
+    github.collaborator = True
+    github.pr = PullRequestInfo(number=7, title="Add thing", state=state, head_sha="f" * 40,
+                                head_ref="feature/thing", **AUTHOR)
+    response = client.post("/api/v1/environments/", json=BODY, headers=auth_headers)
+    assert response.status_code == 409
+    assert "is closed" in response.json()["detail"]
+    assert captured_request == {}  # request_environment never ran
+
+
+def test_closing_marker_survives_a_rejected_api_request(client, auth_headers, github, db_session, user):
+    from app.crud import environment as environment_crud
+
+    env = environment_crud.create_environment(
+        db=db_session, repository_full_name=REPO, repository_name="app", pr_number=7, pr_title="t",
+        branch_name="b", commit_sha="f" * 40, installation_id=REAL_INSTALLATION, owner=user)
+    environment_crud.mark_closed(db_session, env)
+    github.collaborator = True
+    github.pr = PullRequestInfo(number=7, title="Add thing", state="closed", head_sha="f" * 40,
+                                head_ref="feature/thing", **AUTHOR)
+    assert client.post("/api/v1/environments/", json=BODY, headers=auth_headers).status_code == 409
+    db_session.refresh(env)
+    assert env.closed_at is not None
