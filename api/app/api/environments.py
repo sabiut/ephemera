@@ -124,6 +124,14 @@ async def create_environment(
                     "a repository collaborator, or an admin (ADMIN_GITHUB_LOGINS) can create its environments."
                 ),
             )
+        # Only an open PR gets a preview. request_environment() clears the
+        # closed marker, so without this a closed or merged PR's preview
+        # could be brought back from the API after its teardown.
+        if pr.state != "open":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Pull request #{env_data.pr_number} in {repo} is {pr.state}; previews are only created for open pull requests",
+            )
     except GitHubUnavailable:
         raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
 
