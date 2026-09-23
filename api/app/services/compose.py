@@ -94,3 +94,68 @@ def image_report(compose: Dict[str, Any], commit_sha: Optional[str]) -> ImageRep
         elif cfg.get("build"):
             unpinned_builds.append(name)
     return ImageReport(images, pinned, unpinned_builds, build_only)
+
+
+# ---------------------------------------------------------------- public vs internal
+
+PUBLIC_LABEL = "ephemera.public"
+
+# Images whose ports speak a database, cache or queue protocol, not HTTP.
+INTERNAL_IMAGES = {
+    "postgres", "postgis", "timescaledb", "mysql", "mariadb", "percona", "mongo", "mongodb",
+    "redis", "valkey", "keydb", "memcached", "rabbitmq", "kafka", "confluentinc/cp-kafka",
+    "bitnami/kafka", "zookeeper", "cassandra", "nats", "mcr.microsoft.com/mssql/server",
+    "cockroachdb/cockroach", "neo4j", "influxdb", "etcd",
+}
+# Default ports of the same, for images not recognised by name.
+INTERNAL_PORTS = {5432, 3306, 1433, 1521, 27017, 6379, 11211, 5672, 9092, 2181, 9042, 4222, 26257, 7687, 2379}
+
+
+def _labels(cfg: Dict[str, Any]) -> Dict[str, str]:
+    raw = cfg.get("labels") or {}
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    out: Dict[str, str] = {}
+    for item in raw if isinstance(raw, list) else []:
+        key, _, value = str(item).partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def _image_name(image: str) -> str:
+    """'docker.io/library/postgres:16@sha256:..' -> 'postgres'; keeps org/name for others."""
+    name = image.split("@", 1)[0]
+    last = name.rsplit("/", 1)
+    if ":" in last[-1]:
+        name = name.rsplit(":", 1)[0]
+    for prefix in ("docker.io/", "index.docker.io/", "library/"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    if name.startswith("library/"):
+        name = name[len("library/"):]
+    return name
+
+
+def classify_service(cfg: Dict[str, Any], target_ports: List[int]) -> "tuple[bool, str]":
+    """
+    Whether a compose service should get a public HTTPS address.
+
+    Returns (public, reason). A label ``ephemera.public: "true"|"false"``
+    always wins. Otherwise databases, caches and queues, recognised by image
+    or by their default ports, are internal: they keep an in-cluster address
+    other services use, but get no Ingress and no URL check, which a
+    non-HTTP port would fail. Anything else with ports is public.
+    """
+    label = _labels(cfg).get(PUBLIC_LABEL, "").strip().lower()
+    if label in ("true", "yes", "1"):
+        return True, f"label {PUBLIC_LABEL}=true"
+    if label in ("false", "no", "0"):
+        return False, f"label {PUBLIC_LABEL}=false"
+    if not target_ports:
+        return False, "no ports"
+    name = _image_name(str(cfg.get("image") or ""))
+    if name in INTERNAL_IMAGES or name.rsplit("/", 1)[-1] in INTERNAL_IMAGES:
+        return False, f"{name} is a database, cache or queue"
+    if all(port in INTERNAL_PORTS for port in target_ports):
+        return False, f"port {target_ports[0]} is a database, cache or queue port"
+    return True, "serves HTTP"

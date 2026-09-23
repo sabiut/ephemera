@@ -119,6 +119,19 @@ Signing in to the dashboard does not connect a repository; installing the Epheme
 2. **Check the setup.** "Check setup" reads the compose file on the default branch and reports, per service, whether it can be deployed, whether it is built from each commit, and whether reviewers get a link. It flags what previews ignore (volumes, env_file, entrypoint and so on) and services without ports, which other services cannot reach by name. Each problem comes with a fix. The same report is available at `GET /api/v1/repositories/{owner}/{repo}/check`.
 3. **Create the first preview.** Open a pull request, or use "Create preview" next to an open one on the Repositories page (`GET /api/v1/repositories/{owner}/{repo}/pulls` lists them with their preview state). A failed preview offers "Retry preview".
 
+**Which services get a public link.** Every service with `ports:` gets an in-cluster address, so other services reach it by name (for example `db:5432`). Only services that serve HTTP also get a public HTTPS link. Databases, caches and queues (Postgres, MySQL, Redis, Mongo, RabbitMQ, Kafka and similar, recognised by image or by default port) are internal. Override the guess with a compose label:
+
+```yaml
+services:
+  admin:
+    image: acme/admin
+    ports: ["9000"]
+    labels:
+      ephemera.public: "true"    # or "false" to keep an HTTP service internal
+```
+
+A preview with no public service fails with an explanation, since a reviewer would have nothing to open.
+
 Cloud credentials and API tokens sit under **Advanced**: previews created from pull requests use neither. They exist for your own CI workflows that call the Ephemera API.
 
 ## Previewing a pull request's own code

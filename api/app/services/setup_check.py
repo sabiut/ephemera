@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from app.services.compose import commit_variables, image_report, interpolate
+from app.services.compose import PUBLIC_LABEL, classify_service, commit_variables, image_report, interpolate
 from app.services.deployment import COMPOSE_FILENAMES, choose_primary_url, parse_port
 from app.services.github import InstalledRepository, github_service
 
@@ -20,6 +20,7 @@ _PROBE_SHA = "e" * 40
 
 # Keys the compose converter turns into Kubernetes resources.
 SUPPORTED_KEYS = {"image", "build", "ports", "environment", "command"}
+# labels are read for ephemera.public; other labels are harmless
 # Keys that are safe to ignore: they do not change what the service does.
 HARMLESS_KEYS = {"container_name", "restart", "depends_on", "labels", "healthcheck", "platform", "pull_policy", "tty", "stdin_open"}
 # What each commonly used unsupported key means for a preview.
@@ -121,7 +122,12 @@ def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch
         cfg = cfg if isinstance(cfg, dict) else {}
         ports = [p for p in map(parse_port, cfg.get("ports", []) or []) if p]
         deployable = name in images.images
-        public = deployable and bool(ports)
+        is_public, why = classify_service(cfg, [t for _, t in ports])
+        public = deployable and is_public
+        if deployable and ports and not is_public:
+            add(Check("ok", f"{name}: internal service",
+                      f"Reachable by other services as {name}:{ports[0][1]}; no public link ({why}). "
+                      f"Add the label {PUBLIC_LABEL}: \"true\" if reviewers should open it."))
         if public:
             public_urls[name] = name
         report.services.append(ServiceSummary(
@@ -161,8 +167,10 @@ def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch
                   (f"; also {', '.join(n for n in public_urls if n != primary_name)}" if len(public_urls) > 1 else "")))
     else:
         add(Check("error", "Nothing for a reviewer to open",
-                  "No deployable service publishes a port.",
-                  "Add ports: to the service reviewers should open, for example ports: [\"8080:8080\"]."))
+                  "No deployable service serves HTTP on a published port. Databases, caches and queues "
+                  "are internal and get no public link.",
+                  "Add ports: to the web service reviewers should open, for example ports: [\"8080:8080\"], "
+                  f"or label a service {PUBLIC_LABEL}: \"true\"."))
 
     report.ready = not any(c.level == "error" for c in report.checks)
     return report
