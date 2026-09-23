@@ -342,11 +342,25 @@ def destroy_environment(
     environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.DESTROYING)
 
     try:
-        if not kubernetes_service.delete_namespace(environment.namespace):
-            raise RuntimeError("Failed to delete Kubernetes namespace")
+        outcome = kubernetes_service.delete_namespace(environment.namespace)
+        if outcome == kubernetes_service.DELETE_REFUSED:
+            raise RuntimeError(f"Refused to delete {environment.namespace}: it is not an Ephemera namespace")
+        if outcome == kubernetes_service.DELETE_ERROR:
+            # Stay DESTROYING: the hourly cleanup retries the deletion. Saying
+            # "Destroyed" here is how a failed API call used to leave
+            # previews running with no record of them.
+            environment.error_message = "Namespace deletion failed; will retry"
+            self.db.commit()
+            logger.error(f"Deleting {environment.namespace} failed; leaving environment {environment_id} DESTROYING")
+            return {"success": False, "environment_id": environment_id, "error": "namespace deletion failed"}
+        if outcome == kubernetes_service.DELETE_STARTED and not kubernetes_service.wait_for_namespace_gone(
+            environment.namespace, timeout_seconds=settings.preview_destroy_confirm_seconds
+        ):
+            logger.warning(f"{environment.namespace} still terminating; leaving environment {environment_id} DESTROYING")
+            return {"success": False, "environment_id": environment_id, "error": "namespace still terminating"}
 
         environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.DESTROYED)
-        logger.info(f"Environment {environment_id} destroyed successfully")
+        logger.info(f"Environment {environment_id} destroyed; namespace {environment.namespace} is gone")
 
         if installation_id and repo_full_name and pr_number:
             action = "merged" if pr_merged else "closed"

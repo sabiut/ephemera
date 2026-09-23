@@ -70,7 +70,7 @@ def cleanup_stale_environments(self):
         for env in provisioning_envs:
             logger.warning(f"Cleaning up stale environment {env.id} stuck in PROVISIONING")
 
-            # delete_namespace tolerates a missing namespace
+            # Remove whatever the stuck attempt created; a missing namespace is fine
             kubernetes_service.delete_namespace(env.namespace)
 
             # Mark as failed
@@ -95,16 +95,18 @@ def cleanup_stale_environments(self):
         for env in destroying_envs:
             logger.warning(f"Cleaning up stale environment {env.id} stuck in DESTROYING")
 
-            # Force delete namespace (tolerates a missing one)
-            kubernetes_service.delete_namespace(env.namespace)
-
-            # Mark as destroyed
-            environment_crud.update_environment_status(
-                db=self.db,
-                environment=env,
-                status=EnvironmentStatus.DESTROYED
-            )
-            cleaned_count += 1
+            # Only a namespace confirmed absent makes the environment
+            # DESTROYED. Otherwise request deletion again and check next hour.
+            outcome = kubernetes_service.delete_namespace(env.namespace)
+            if outcome == kubernetes_service.DELETE_ABSENT:
+                environment_crud.update_environment_status(
+                    db=self.db,
+                    environment=env,
+                    status=EnvironmentStatus.DESTROYED
+                )
+                cleaned_count += 1
+            else:
+                logger.warning(f"{env.namespace} not gone yet ({outcome}); still DESTROYING")
 
         # Find environments in READY state but namespace doesn't exist
         ready_envs = self.db.query(Environment).filter(
@@ -215,6 +217,19 @@ def is_transient_failure(error_message: Optional[str]) -> bool:
     return bool(error_message) and any(m in error_message for m in TRANSIENT_FAILURE_MARKERS)
 
 
+def _pull_request_state(env) -> Optional[str]:
+    """"open" or "closed" from GitHub, or None if GitHub could not be asked."""
+    from app.services.github import github_service
+    try:
+        pr = github_service.get_pull_request(env.installation_id, env.repository_full_name, env.pr_number)
+    except Exception as e:
+        logger.warning(f"Could not read PR state for environment {env.id}: {e}")
+        return None
+    if pr is None:
+        return "closed"  # deleted or no longer visible: treat as gone
+    return "open" if pr.state == "open" else "closed"
+
+
 @celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.cleanup.retry_failed_environments")
 def retry_failed_environments(self, max_age_hours: int = 1):
     """
@@ -242,6 +257,18 @@ def retry_failed_environments(self, max_age_hours: int = 1):
             ).count()
             if attempts != 1 or not is_transient_failure(env.error_message):
                 skipped += 1
+                continue
+            state = _pull_request_state(env)
+            if state == "closed":
+                # The close webhook may have been missed or the environment
+                # failed before it arrived: clean up instead of retrying.
+                from app.tasks.environment import destroy_environment
+                destroy_environment.delay(environment_id=env.id)
+                logger.info(f"PR for environment {env.id} is closed; destroying instead of retrying")
+                skipped += 1
+                continue
+            if state != "open":
+                skipped += 1  # could not ask GitHub; never retry blind
                 continue
             deployment_crud.create_deployment(self.db, env, env.commit_sha)
             provision_environment.delay(environment_id=env.id)

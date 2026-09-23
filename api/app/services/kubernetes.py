@@ -77,10 +77,20 @@ class KubernetesService:
     MANAGED_PREFIX = "pr-"
     MANAGED_LABELS = ({"managed-by": "ephemera"}, {"app": "ephemera"})
 
+    # Outcomes of delete_namespace. Only DELETE_ABSENT means the namespace is
+    # gone; DELETE_STARTED means Kubernetes accepted the deletion, which then
+    # runs in the background until finalizers complete.
+    DELETE_ABSENT = "absent"
+    DELETE_STARTED = "deleting"
+    DELETE_REFUSED = "refused"
+    DELETE_ERROR = "error"
+
     def is_managed_namespace(self, namespace: str) -> Optional[bool]:
         """
         True if the namespace looks like one Ephemera created: named pr-* and
-        carrying our label. None if it does not exist or the API failed.
+        carrying our label. False if it exists but is not ours. None only if
+        it does not exist. Any other API error is raised, so that a failed
+        lookup is never mistaken for a namespace that is already gone.
         Guards the cluster-wide delete permission against a bad record or a
         bug ever pointing at kube-system or ephemera-system.
         """
@@ -91,42 +101,63 @@ class KubernetesService:
         except ApiException as e:
             if e.status == 404:
                 return None
-            logger.error(f"Error reading namespace {namespace}: {e}")
-            return None
+            raise
         labels = (ns.metadata.labels or {})
         return any(all(labels.get(k) == v for k, v in wanted.items()) for wanted in self.MANAGED_LABELS)
 
-    def delete_namespace(self, namespace: str) -> bool:
+    def delete_namespace(self, namespace: str) -> str:
         """
-        Delete a namespace Ephemera manages. Returns True if it is gone or
-        being deleted. Refuses (returns False) for unmanaged namespaces.
+        Ask Kubernetes to delete a namespace Ephemera manages.
+
+        Returns DELETE_ABSENT if it does not exist, DELETE_STARTED if the
+        deletion was accepted (it completes asynchronously; confirm with
+        wait_for_namespace_gone), DELETE_REFUSED for a namespace that is not
+        ours, and DELETE_ERROR if the API could not be asked or refused.
         """
         if not self.enabled:
             logger.warning(f"Kubernetes is disabled, skipping namespace deletion: {namespace}")
-            return False
+            return self.DELETE_ERROR
 
-        managed = self.is_managed_namespace(namespace)
+        try:
+            managed = self.is_managed_namespace(namespace)
+        except ApiException as e:
+            logger.error(f"Could not read namespace {namespace} before deleting it: {e.status} {e.reason}")
+            return self.DELETE_ERROR
+        except Exception as e:
+            logger.error(f"Unexpected error reading namespace {namespace}: {e}")
+            return self.DELETE_ERROR
         if managed is None:
-            logger.warning(f"Namespace {namespace} not found")
-            return True
+            logger.info(f"Namespace {namespace} does not exist")
+            return self.DELETE_ABSENT
         if not managed:
             logger.error(f"Refusing to delete namespace {namespace}: not managed by Ephemera")
-            return False
+            return self.DELETE_REFUSED
 
         try:
             self.core_v1.delete_namespace(name=namespace)
-            logger.info(f"Deleted namespace: {namespace}")
-            return True
-
+            logger.info(f"Deletion requested for namespace {namespace}")
+            return self.DELETE_STARTED
         except ApiException as e:
             if e.status == 404:
-                logger.warning(f"Namespace {namespace} not found")
-                return True
-            logger.error(f"Failed to delete namespace {namespace}: {e}")
-            return False
+                return self.DELETE_ABSENT
+            logger.error(f"Failed to delete namespace {namespace}: {e.status} {e.reason}")
+            return self.DELETE_ERROR
         except Exception as e:
             logger.error(f"Unexpected error deleting namespace {namespace}: {e}")
-            return False
+            return self.DELETE_ERROR
+
+    def wait_for_namespace_gone(self, namespace: str, timeout_seconds: int = 180, poll_seconds: float = 5.0) -> bool:
+        """
+        True once the namespace no longer exists. False if it is still there
+        at the deadline, or if its existence cannot be determined.
+        """
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if self.namespace_exists(namespace) is False:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_seconds)
 
     def namespace_exists(self, namespace: str) -> Optional[bool]:
         """
