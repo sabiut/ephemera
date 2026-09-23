@@ -31,6 +31,14 @@ from app.models import APIToken, User  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def no_shared_repo_access_generation(monkeypatch):
+    """Repository access checks Redis for invalidations; tests have no Redis."""
+    from app.services import repo_access
+
+    monkeypatch.setattr(repo_access, "_generation", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def held_environment_lock(monkeypatch):
     """
     Tasks take a Redis lock, and the lock no longer fails open, so tests that

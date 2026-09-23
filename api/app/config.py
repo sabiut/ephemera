@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # How long repository-access answers from GitHub are reused. Collaborators
     # added or removed on GitHub take effect after at most this long.
     repo_access_cache_seconds: int = 300
+    # An empty answer usually means "the App is not installed yet"; keep it
+    # only briefly so installing shows up without waiting out the full TTL.
+    repo_access_empty_cache_seconds: int = 20
 
     # How long a preview may take to become ready (pods ready, then public
     # URLs answering) before it is reported as failed.

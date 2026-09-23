@@ -12,6 +12,7 @@ from app.crud import user as user_crud
 from app.database import SessionLocal
 from app.models.environment import EnvironmentStatus
 from app.schemas.github import PullRequestWebhook
+from app.services import repo_access
 from app.services.github import github_service
 from app.services.provisioning import EnvironmentRequest, request_environment
 from app.tasks.environment import destroy_environment, update_environment
@@ -231,6 +232,14 @@ async def github_webhook(
 
     if x_github_event == "ping":
         return {"status": "pong"}
+
+    if x_github_event in ("installation", "installation_repositories"):
+        # The App was installed, removed, or given different repositories.
+        # Forget cached access so the dashboard shows the change on the next
+        # load instead of after the cache expires.
+        repo_access.invalidate()
+        logger.info(f"Installation changed ({x_github_event}/{payload.get('action')}); repository access refreshed")
+        return {"status": "received", "event": x_github_event, "action": payload.get("action")}
 
     if x_github_event != "pull_request":
         logger.info(f"Ignoring event type: {x_github_event}")

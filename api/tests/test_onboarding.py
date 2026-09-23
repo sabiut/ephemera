@@ -44,7 +44,9 @@ services:
 """)
     assert report.ready is True
     levels = _levels(report)
-    assert levels["web: built from each commit"] == "ok"
+    assert levels["web: image tag follows each commit"] == "ok"
+    web_check = next(c for c in report.checks if c.title == "web: image tag follows each commit")
+    assert "checked when a preview deploys" in web_check.detail  # configuration only, no availability claim
     assert levels["Reviewers get a link"] == "ok"
     web = next(s for s in report.services if s.name == "web")
     assert web.commit_image and web.public and web.primary
@@ -166,3 +168,25 @@ def test_dashboard_serves_the_repositories_view(client):
     page = client.get("/dashboard").text
     assert 'id="view-repositories"' in page and "Get your first preview" in page
     assert page.count('class="notice"') >= 2  # credentials and tokens explain they are advanced
+
+
+def test_check_endpoint_can_check_a_pull_requests_commit(client, auth_headers, github, monkeypatch):
+    # A fix made inside the PR must be what is checked, not the default branch.
+    seen = {}
+
+    def fetch(repo, ref):
+        seen["ref"] = ref
+        return "docker-compose.yml", "services:\n  web:\n    image: nginx\n    ports: ['80']\n"
+
+    monkeypatch.setattr(setup_check.check_repository, "__defaults__", (None, fetch))
+    github.get_pull_request = lambda installation_id, full_name, number: PullRequestInfo(
+        number, "Add login", "open", "c" * 40, "login", 1, "octocat", None)
+    body = client.get("/api/v1/repositories/acme/app/check?pr=5", headers=auth_headers).json()
+    assert seen["ref"] == "c" * 40
+    assert body["ref_label"] == "PR #5 (ccccccc)" and body["pr_number"] == 5
+    assert body["checks"][0]["detail"] == "at ccccccc"
+
+
+def test_check_endpoint_is_404_for_a_missing_pull_request(client, auth_headers, github):
+    github.get_pull_request = lambda *a: None
+    assert client.get("/api/v1/repositories/acme/app/check?pr=99", headers=auth_headers).status_code == 404

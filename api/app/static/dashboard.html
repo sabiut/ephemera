@@ -189,6 +189,9 @@
             flex: 1;
             margin-left: 240px;
             min-height: 100vh;
+            /* Without this the flex item grows to its widest table, and on a
+               phone half the page (two of the four counters) is off-screen. */
+            min-width: 0;
         }
 
         .page-header {
@@ -223,6 +226,9 @@
             border-radius: 10px;
             padding: 20px;
         }
+        a.stat-link { text-decoration: none; color: inherit; display: block; }
+        a.stat-link:hover { border-color: #6366f1; }
+        .stat-attention .stat-value { color: #ef4444; }
 
         .stat-label {
             font-size: 13px;
@@ -745,22 +751,22 @@
             </div>
             <div class="page-content">
                 <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-label">Environments</div>
-                        <div class="stat-value" id="statTotalEnvs">-</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Active</div>
-                        <div class="stat-value" id="statActiveEnvs">-</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Credentials</div>
-                        <div class="stat-value" id="statCredentials">-</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">API Tokens</div>
-                        <div class="stat-value" id="statTokens">-</div>
-                    </div>
+                    <a class="stat-card stat-link" href="#environments">
+                        <div class="stat-label">Ready previews</div>
+                        <div class="stat-value" id="statReady">-</div>
+                    </a>
+                    <a class="stat-card stat-link" href="#environments">
+                        <div class="stat-label">Deploying</div>
+                        <div class="stat-value" id="statDeploying">-</div>
+                    </a>
+                    <a class="stat-card stat-link" href="#environments">
+                        <div class="stat-label">Needs attention</div>
+                        <div class="stat-value" id="statAttention">-</div>
+                    </a>
+                    <a class="stat-card stat-link" href="#repositories">
+                        <div class="stat-label">Connected repositories</div>
+                        <div class="stat-value" id="statRepos">-</div>
+                    </a>
                 </div>
 
                 <div class="card" id="gettingStarted" hidden>
@@ -804,7 +810,10 @@
         <div id="view-repositories" class="view">
             <div class="page-header">
                 <h1 class="page-title">Repositories</h1>
-                <a id="installAppLink" class="btn btn-ghost" href="#" target="_blank" hidden>Install on another repository</a>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-ghost" id="refreshReposButton" onclick="refreshRepositories(this)">Refresh repositories</button>
+                    <a id="installAppLink" class="btn btn-ghost" href="#" target="_blank" hidden>Install on another repository</a>
+                </div>
             </div>
             <div class="page-content">
                 <div class="card">

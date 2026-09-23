@@ -34,8 +34,14 @@ class RepositoryListResponse(BaseModel):
 
 
 @router.get("/repositories", response_model=RepositoryListResponse)
-async def list_repositories(current_user: User = Depends(get_current_user)):
-    """Repositories with the App installed that the caller can see previews for."""
+async def list_repositories(refresh: bool = False, current_user: User = Depends(get_current_user)):
+    """
+    Repositories with the App installed that the caller can see previews for.
+    ``refresh=true`` asks GitHub again instead of using cached access (the
+    dashboard's Refresh repositories button).
+    """
+    if refresh:
+        repo_access.invalidate()
     try:
         repos = repo_access.accessible_repositories(current_user, is_admin(current_user))
     except GitHubUnavailable:
@@ -60,10 +66,28 @@ def _accessible_repo(owner: str, repo: str, user: User) -> InstalledRepository:
 
 
 @router.get("/repositories/{owner}/{repo}/check")
-async def check_repository(owner: str, repo: str, current_user: User = Depends(get_current_user)):
-    """Validate the repository's compose file on its default branch before the first preview."""
-    report = setup_check.check_repository(_accessible_repo(owner, repo, current_user))
-    return report.as_dict()
+async def check_repository(owner: str, repo: str, pr: Optional[int] = None,
+                           current_user: User = Depends(get_current_user)):
+    """
+    Check the repository's compose file: on the default branch, or with
+    ``pr=N`` at that pull request's latest commit, so a fix made inside the
+    PR is what gets checked.
+    """
+    installed = _accessible_repo(owner, repo, current_user)
+    ref, label = None, None
+    if pr is not None:
+        try:
+            pull = github_service.get_pull_request(installed.installation_id, installed.full_name, pr)
+        except GitHubUnavailable:
+            raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
+        if pull is None:
+            raise HTTPException(status_code=404, detail=f"Pull request #{pr} not found in {installed.full_name}")
+        ref, label = pull.head_sha, f"PR #{pr} ({pull.head_sha[:7]})"
+    report = setup_check.check_repository(installed, ref=ref)
+    body = report.as_dict()
+    body["ref_label"] = label or report.ref
+    body["pr_number"] = pr
+    return body
 
 
 class PullResponse(BaseModel):
