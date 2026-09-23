@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from kubernetes.client.rest import ApiException
 
-from app.services.compose import classify_service, commit_variables, image_report, interpolate
+from app.services.compose import build_only_blocker, classify_service, commit_variables, image_report, interpolate
 
 logger = logging.getLogger(__name__)
 
@@ -568,6 +568,17 @@ class DeploymentService:
                     "error": "Failed to parse docker-compose.yml",
                     "services": [],
                     "service_urls": {},
+                }
+
+            blocker = build_only_blocker(compose)
+            if blocker:
+                return {
+                    "success": False,
+                    "compose_found": True,
+                    "error": blocker,
+                    "services": [],
+                    "service_urls": {},
+                    "skipped_services": image_report(compose, ref).build_only,
                 }
 
             manifests = self.convert_compose_to_k8s(compose, namespace, app_name)

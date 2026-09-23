@@ -159,3 +159,33 @@ def classify_service(cfg: Dict[str, Any], target_ports: List[int]) -> "tuple[boo
     if all(port in INTERNAL_PORTS for port in target_ports):
         return False, f"port {target_ports[0]} is a database, cache or queue port"
     return True, "serves HTTP"
+
+
+def build_only_blocker(compose: Dict[str, Any]) -> Optional[str]:
+    """
+    Why the preview cannot be deployed at all, or None.
+
+    Ephemera runs images; it cannot build them. A service with ``build:`` and
+    no ``image:`` is skipped. When that leaves nothing a reviewer could open,
+    deploying the rest (typically a database and a cache) only produces
+    crash-looping pods and a misleading error, so the deploy stops before
+    touching the cluster and says what to add.
+    """
+    from app.services.deployment import parse_port  # deployment imports this module
+
+    report = image_report(compose, None)
+    if not report.build_only:
+        return None
+    for name, cfg in (compose.get("services") or {}).items():
+        if name not in report.images or not isinstance(cfg, dict):
+            continue
+        ports = [t for _, t in (p for p in map(parse_port, cfg.get("ports", []) or []) if p)]
+        if classify_service(cfg, ports)[0]:
+            return None  # something public still deploys; the rest is reported as skipped
+    names = ", ".join(f"`{n}`" for n in report.build_only)
+    return (
+        f"Nothing to preview: {names} {'has' if len(report.build_only) == 1 else 'have'} `build:` but no `image:`. "
+        "Ephemera runs images and cannot build them. Have CI push an image for each commit and reference it "
+        "next to `build:`, e.g. `image: ghcr.io/<owner>/<repo>:${EPHEMERA_SHA}`. "
+        "The setup check on the Repositories page shows this per service."
+    )
