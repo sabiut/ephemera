@@ -190,3 +190,22 @@ def test_check_endpoint_can_check_a_pull_requests_commit(client, auth_headers, g
 def test_check_endpoint_is_404_for_a_missing_pull_request(client, auth_headers, github):
     github.get_pull_request = lambda *a: None
     assert client.get("/api/v1/repositories/acme/app/check?pr=99", headers=auth_headers).status_code == 404
+
+
+def test_landing_page_states_the_real_limits_and_links(client, monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main.github_service, "app_install_url", lambda: "https://github.com/apps/ephemera-devs/installations/new")
+    page = client.get("/").text
+    assert "Review every pull request in a running application." in page
+    assert "Free during the beta" in page
+    assert "limited to 1 CPU, 2 GiB of memory and 10 pods" in page  # from settings, not hard-coded
+    assert 'href="https://github.com/apps/ephemera-devs/installations/new"' in page
+    assert "https://github.com/sabiut/ephemera-test-app/fork" in page
+    assert "{{" not in page  # every placeholder filled
+
+
+def test_landing_page_without_the_app_configured_still_renders(client, monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main.github_service, "app_install_url", lambda: None)
+    page = client.get("/").text
+    assert 'href="/auth/github/login" target="_blank" rel="noopener">Install the Ephemera GitHub App' in page

@@ -261,3 +261,14 @@ def test_ready_means_the_rollout_is_complete():
     stale = _dep_status(replicas=1, updated_replicas=1, ready_replicas=1, available_replicas=1)
     stale.status.observed_generation = 1
     assert K._rollout_complete(stale) is False
+
+
+def test_repository_variable_makes_image_names_fork_friendly():
+    # ghcr.io/${EPHEMERA_REPOSITORY} follows the repository, so a fork of
+    # the sample app builds and previews its own image. Registries need
+    # lowercase.
+    from app.services.compose import commit_variables, interpolate
+    text = interpolate("image: ghcr.io/${EPHEMERA_REPOSITORY}:${EPHEMERA_SHA}\n",
+                       commit_variables(SHA, "Jane-Doe/Ephemera-Test-App")).text
+    assert text == f"image: ghcr.io/jane-doe/ephemera-test-app:{SHA}\n"
+    assert "EPHEMERA_REPOSITORY" not in commit_variables(SHA)  # only when the repository is known

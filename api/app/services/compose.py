@@ -23,9 +23,17 @@ _VAR = re.compile(
 )
 
 
-def commit_variables(commit_sha: str) -> Dict[str, str]:
-    """The variables Ephemera provides for a commit."""
-    return {"EPHEMERA_SHA": commit_sha, "EPHEMERA_SHA_SHORT": commit_sha[:7]}
+def commit_variables(commit_sha: str, repository: Optional[str] = None) -> Dict[str, str]:
+    """
+    The variables Ephemera provides for a commit. EPHEMERA_REPOSITORY is the
+    repository's owner/name in lowercase, as registries require, so a compose
+    file can name its image ghcr.io/${EPHEMERA_REPOSITORY} and keep working
+    when the repository is forked or renamed.
+    """
+    variables = {"EPHEMERA_SHA": commit_sha, "EPHEMERA_SHA_SHORT": commit_sha[:7]}
+    if repository:
+        variables["EPHEMERA_REPOSITORY"] = repository.lower()
+    return variables
 
 
 @dataclass

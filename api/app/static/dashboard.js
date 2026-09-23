@@ -583,7 +583,8 @@ function renderGettingStarted() {
         { done: hasRepo, title: 'Connect a repository', body: hasRepo
             ? `Connected: ${cachedRepositories.slice(0, 3).map(r => escapeHtml(r.full_name)).join(', ')}${cachedRepositories.length > 3 ? '…' : ''}`
             : install + ' Signing in does not connect repositories; installing the App does. '
-              + 'Installed already? <a href="#" onclick="refreshRepositories(); return false;" style="color:#6366f1;">Refresh repositories</a>.' },
+              + 'Installed already? <a href="#" onclick="refreshRepositories(); return false;" style="color:#6366f1;">Refresh repositories</a>. '
+              + 'Just exploring? <a href="/#sample" style="color:#6366f1;">Try the sample app</a> first.' },
         { done: false, title: 'Check the setup', body: 'Open <a href="#repositories" style="color:#6366f1;">Repositories</a> and run the setup check. It reads your compose file and tells you what to fix before a pull request finds out the hard way.' },
         { done: hasPreview, title: 'Create the first preview', body: 'Open a pull request, or create a preview for an existing one from the Repositories page. The link appears on the pull request and here.' },
     ];

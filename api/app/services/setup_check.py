@@ -103,7 +103,7 @@ def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch
     report.compose_file = filename
     add(Check("ok", f"Found {filename}", f"at {where}"))
 
-    interpolated = interpolate(content, commit_variables(_PROBE_SHA))
+    interpolated = interpolate(content, commit_variables(_PROBE_SHA, repo.full_name))
     for err in interpolated.errors:
         add(Check("error", "Required variable is not set", err,
                   "Give the variable a default with ${NAME:-value} or remove the requirement."))
