@@ -20,7 +20,7 @@ This directory contains Terraform configurations for deploying Ephemera infrastr
 ## Cost Estimates
 
 ### Development Environment (Preemptible)
-- **GKE Nodes** (1 x e2-small preemptible): ~$5/month
+- **GKE Nodes** (3 x e2-medium preemptible, one per zone at minimum): ~$30/month
 - **Cloud SQL** (db-f1-micro): FREE (free tier eligible)
 - **Memorystore** (1GB BASIC tier): ~$26/month
 - **Networking**: ~$5/month
@@ -147,8 +147,8 @@ REDIS_URL=redis://<redis_host>:6379/0
 
 ### GKE Cluster
 - **Version**: 1.28 (auto-upgrade enabled)
-- **Node Machine**: e2-small (2 vCPU, 2GB RAM)
-- **Node Pool**: 1-3 nodes with autoscaling
+- **Node Machine**: e2-medium (2 shared vCPU, 1 sustained; 4GB RAM). e2-small was too small: GKE's system pods left so little that cluster DNS timed out under load.
+- **Node Pool**: 1-3 nodes per zone with autoscaling
 - **Preemptible**: Enabled (80% cost savings)
 - **Workload Identity**: Enabled for secure authentication
 - **Private Nodes**: Nodes don't have public IPs
@@ -173,7 +173,7 @@ REDIS_URL=redis://<redis_host>:6379/0
 ### For Testing
 1. **Use Preemptible Nodes**: `use_preemptible_nodes = true` (80% savings)
 2. **Minimum Node Count**: `node_min_count = 1`
-3. **Small Instance Sizes**: `node_machine_type = "e2-small"`, `db_tier = "db-f1-micro"`
+3. **Small Instance Sizes**: `node_machine_type = "e2-medium"` (the smallest that stays reliable), `db_tier = "db-f1-micro"`
 4. **BASIC Redis Tier**: `redis_tier = "BASIC"`
 5. **Destroy When Not in Use**: `terraform destroy`
 
@@ -181,7 +181,7 @@ REDIS_URL=redis://<redis_host>:6379/0
 1. **Use Regular Nodes**: `use_preemptible_nodes = false`
 2. **High Availability**: `db_tier = "db-custom-2-7680"`, `redis_tier = "STANDARD_HA"`
 3. **More Nodes**: `node_min_count = 3`
-4. **Larger Instances**: `node_machine_type = "e2-medium"`
+4. **Larger Instances**: `node_machine_type = "e2-standard-2"`
 5. **Enable Point-in-Time Recovery** for database
 
 ## Billing Alerts

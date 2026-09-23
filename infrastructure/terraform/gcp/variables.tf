@@ -30,7 +30,11 @@ variable "cluster_version" {
 variable "node_machine_type" {
   description = "Machine type for GKE nodes"
   type        = string
-  default     = "e2-small" # Cost-optimized: 2 vCPU, 2GB RAM
+  # e2-medium: 2 shared vCPUs (1 sustained), 4 GB. e2-small (0.5 sustained,
+  # 2 GB) left too little after GKE's own system pods: under load cluster
+  # DNS timed out its health checks and workers could not resolve
+  # api.github.com, so PR status updates were lost.
+  default = "e2-medium"
 }
 
 variable "node_disk_size_gb" {
