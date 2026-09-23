@@ -551,7 +551,7 @@ class DeploymentService:
                     "service_urls": {},
                 }
 
-            interpolated = interpolate(compose_content, commit_variables(ref))
+            interpolated = interpolate(compose_content, commit_variables(ref, repo_full_name))
             if interpolated.errors:
                 return {
                     "success": False,

@@ -3,162 +3,200 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ephemera - Environment as a Service</title>
+    <title>Ephemera: a running preview for every pull request</title>
+    <meta name="description" content="Review every pull request in a running application. Ephemera deploys each PR's docker-compose services to its own preview link, updates it on every push, and removes it when the PR closes.">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #0a0a0a;
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            color: #e5e5e5;
+            line-height: 1.6;
         }
+        a { color: #a5b4fc; }
+        code { background: #1c1c1c; border: 1px solid #262626; padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
+        .wrap { max-width: 980px; margin: 0 auto; padding: 0 20px; }
 
-        .container {
-            text-align: center;
-            max-width: 440px;
-            width: 90%;
-        }
+        header { border-bottom: 1px solid #1a1a1a; }
+        header .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; gap: 12px; }
+        .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; color: #fff; text-decoration: none; }
+        .brand svg { width: 26px; height: 26px; }
+        .beta { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: #a5b4fc; border: 1px solid #312e81; background: #1e1b4b; padding: 2px 8px; border-radius: 999px; }
 
-        .logo {
-            margin-bottom: 24px;
-        }
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 20px; border-radius: 8px; font-size: 15px; font-weight: 600; text-decoration: none; transition: background 0.15s, border-color 0.15s; white-space: nowrap; }
+        .btn-primary { background: #6366f1; color: #fff; }
+        .btn-primary:hover { background: #5558e3; }
+        .btn-ghost { border: 1px solid #2a2a2a; color: #e5e5e5; }
+        .btn-ghost:hover { border-color: #6366f1; }
+        .btn-sm { padding: 8px 14px; font-size: 14px; gap: 0; }
+        .btn svg { width: 18px; height: 18px; }
 
-        .logo svg {
-            width: 48px;
-            height: 48px;
-        }
+        .hero { padding-top: 80px; padding-bottom: 56px; }
+        .hero h1 { font-size: clamp(32px, 6vw, 52px); line-height: 1.1; color: #fff; letter-spacing: -1px; max-width: 760px; }
+        .hero p.lead { font-size: clamp(17px, 2.4vw, 20px); color: #a3a3a3; margin-top: 20px; max-width: 640px; }
+        .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+        .fine { color: #737373; font-size: 14px; margin-top: 14px; }
 
-        h1 {
-            color: #fff;
-            font-size: 2.2em;
-            font-weight: 700;
-            letter-spacing: -0.5px;
-            margin-bottom: 8px;
-        }
+        section { padding: 48px 0; border-top: 1px solid #161616; }
+        h2 { font-size: 24px; color: #fff; margin-bottom: 8px; letter-spacing: -0.3px; }
+        .sub { color: #8a8a8a; margin-bottom: 24px; max-width: 680px; }
 
-        .tagline {
-            color: #666;
-            font-size: 1.05em;
-            margin-bottom: 40px;
-        }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+        .card { background: #121212; border: 1px solid #1f1f1f; border-radius: 12px; padding: 20px; }
+        .card h3 { font-size: 16px; color: #fff; margin-bottom: 6px; }
+        .card p { color: #a3a3a3; font-size: 15px; }
+        .num { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: #1e1b4b; color: #a5b4fc; font-weight: 700; font-size: 13px; align-items: center; justify-content: center; margin-bottom: 10px; }
+        .card .link { display: inline-block; margin-top: 12px; font-weight: 600; text-decoration: none; }
 
-        .card {
-            background: #151515;
-            border: 1px solid #222;
-            border-radius: 12px;
-            padding: 36px 32px;
-            margin-bottom: 24px;
-        }
+        .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+        .facts ul { list-style: none; }
+        .facts li { position: relative; padding-left: 22px; margin: 10px 0; color: #bdbdbd; font-size: 15px; }
+        .facts li::before { content: ""; position: absolute; left: 4px; top: 10px; width: 7px; height: 7px; border-radius: 50%; background: #6366f1; }
 
-        .feature-list {
-            text-align: left;
-            margin-bottom: 32px;
-        }
+        ol.steps { list-style: none; counter-reset: step; }
+        ol.steps li { counter-increment: step; position: relative; padding: 0 0 18px 44px; color: #bdbdbd; font-size: 15px; }
+        ol.steps li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%; background: #1e1b4b; color: #a5b4fc; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+        ol.steps li strong { color: #fff; font-weight: 600; }
 
-        .feature {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: #999;
-            font-size: 14px;
-            padding: 8px 0;
-        }
+        .callout { background: #111827; border: 1px solid #1f2a44; border-radius: 12px; padding: 20px; color: #cbd5e1; }
+        footer { border-top: 1px solid #161616; padding: 32px 0 48px; color: #737373; font-size: 14px; }
+        footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
 
-        .feature-icon {
-            width: 20px;
-            height: 20px;
-            flex-shrink: 0;
-            color: #6366f1;
-        }
-
-        .github-login-btn {
-            background: #fff;
-            color: #0a0a0a;
-            padding: 12px 28px;
-            border: none;
-            border-radius: 8px;
-            font-size: 15px;
-            font-weight: 500;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.15s ease;
-            width: 100%;
-            justify-content: center;
-        }
-
-        .github-login-btn:hover {
-            background: #e5e5e5;
-        }
-
-        .github-icon {
-            width: 20px;
-            height: 20px;
-        }
-
-        .footer {
-            color: #444;
-            font-size: 13px;
+        @media (max-width: 560px) {
+            .hero { padding-top: 48px; padding-bottom: 40px; }
+            .actions .btn { flex: 1 1 100%; }
+            header .btn span.long { display: none; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="logo">
-            <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
-            </svg>
+    <header>
+        <div class="wrap">
+            <a class="brand" href="/">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                </svg>
+                Ephemera <span class="beta">Beta</span>
+            </a>
+            <a href="/auth/github/login" class="btn btn-ghost btn-sm">Sign in<span class="long">&nbsp;with GitHub</span></a>
+        </div>
+    </header>
+
+    <main>
+        <div class="wrap hero">
+            <h1>Review every pull request in a running application.</h1>
+            <p class="lead">Share a preview link with your team. Updates deploy automatically, and previews are removed when the PR closes.</p>
+            <div class="actions">
+                <a href="/auth/github/login" class="btn btn-primary">
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                    Continue with GitHub
+                </a>
+                <a href="#sample" class="btn btn-ghost">Try the sample app</a>
+            </div>
+            <p class="fine">Free during the beta.</p>
         </div>
 
-        <h1>Ephemera</h1>
-        <p class="tagline">Preview Environments for Every Pull Request</p>
-
-        <div class="card">
-            <div class="feature-list">
-                <div class="feature">
-                    <svg class="feature-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-                    </svg>
-                    Automatic environment provisioning
-                </div>
-                <div class="feature">
-                    <svg class="feature-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-                    </svg>
-                    Kubernetes-powered deployments
-                </div>
-                <div class="feature">
-                    <svg class="feature-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-                    </svg>
-                    SSL certificates via Let's Encrypt
-                </div>
-                <div class="feature">
-                    <svg class="feature-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-                    </svg>
-                    Cleanup on PR close
+        <section>
+            <div class="wrap">
+                <h2>How it works</h2>
+                <p class="sub">No new tools for reviewers: the link arrives on the pull request.</p>
+                <div class="grid">
+                    <div class="card">
+                        <span class="num">1</span>
+                        <h3>Install the GitHub App</h3>
+                        <p>Choose the repositories that should get previews. Ephemera only sees those.</p>
+                    </div>
+                    <div class="card">
+                        <span class="num">2</span>
+                        <h3>Open a pull request</h3>
+                        <p>Ephemera deploys the PR's <code>docker-compose.yml</code> services and comments with a link once the preview answers.</p>
+                    </div>
+                    <div class="card">
+                        <span class="num">3</span>
+                        <h3>Share the link</h3>
+                        <p>Every push redeploys the same link. Closing or merging the PR removes the preview.</p>
+                    </div>
                 </div>
             </div>
+        </section>
 
-            <a href="/auth/github/login" class="github-login-btn">
-                <svg class="github-icon" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-                </svg>
-                Continue with GitHub
-            </a>
+        <section>
+            <div class="wrap">
+                <h2>Where to start</h2>
+                <p class="sub">Pick the path that fits.</p>
+                <div class="grid">
+                    <div class="card">
+                        <h3>Trying it out</h3>
+                        <p>Fork the sample app and get a working preview in about ten minutes, before touching your own code.</p>
+                        <a class="link" href="#sample">Try the sample app →</a>
+                    </div>
+                    <div class="card">
+                        <h3>Your team's app</h3>
+                        <p>Sign in, connect a repository, and run the setup check. It explains what to change and generates the CI workflow that builds your images.</p>
+                        <a class="link" href="/auth/github/login">Connect a repository →</a>
+                    </div>
+                    <div class="card">
+                        <h3>Running Ephemera yourself</h3>
+                        <p>Ephemera is open source. Deploy it to your own Kubernetes cluster with the Terraform and workflow in the repository.</p>
+                        <a class="link" href="https://github.com/sabiut/ephemera#readme" target="_blank" rel="noopener">Self-hosting guide →</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <div class="wrap facts">
+                <div>
+                    <h2>What your app needs</h2>
+                    <ul>
+                        <li>A <code>docker-compose.yml</code> in the repository root.</li>
+                        <li>A web service with <code>ports:</code>. That is the link reviewers open.</li>
+                        <li>An image per commit in a public registry. Ephemera runs images; it doesn't build them. The dashboard generates the GitHub Actions workflow that does.</li>
+                        <li>Databases, caches and queues run inside the preview, reachable by their compose names. Their data isn't kept.</li>
+                    </ul>
+                </div>
+                <div>
+                    <h2>Where previews run</h2>
+                    <ul>
+                        <li>On Ephemera's Kubernetes cluster on Google Cloud, each pull request in its own isolated namespace.</li>
+                        <li>Each preview is limited to {{PREVIEW_CPU}} CPU, {{PREVIEW_MEMORY}} of memory and {{PREVIEW_PODS}} pods.</li>
+                        <li><strong>Preview links are public:</strong> anyone with the link can open one. Don't put real secrets or customer data in a preview.</li>
+                        <li>The dashboard shows a preview to its PR's author and to the repository's collaborators.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="sample">
+            <div class="wrap">
+                <h2>Try the sample app</h2>
+                <p class="sub"><a href="https://github.com/sabiut/ephemera-test-app" target="_blank" rel="noopener">ephemera-test-app</a> is a small web app already set up for Ephemera: it builds an image for every commit and serves a page showing which commit it runs.</p>
+                <ol class="steps">
+                    <li><strong><a href="https://github.com/sabiut/ephemera-test-app/fork" target="_blank" rel="noopener">Fork the sample app</a></strong> to your GitHub account.</li>
+                    <li>In your fork, open the <strong>Actions</strong> tab and enable workflows. GitHub turns them off in new forks.</li>
+                    <li><strong><a href="{{INSTALL_URL}}" target="_blank" rel="noopener">Install the Ephemera GitHub App</a></strong> on your fork, then <a href="/auth/github/login">sign in</a>.</li>
+                    <li>On a new branch, change the message in <code>index.php</code> and open a pull request in your fork.</li>
+                    <li>The first build creates the image package in your account, and it starts out private. Make it public: <strong>Packages</strong>, then <strong>Package settings</strong>, then <strong>Change visibility</strong>. Then click <strong>Retry preview</strong> on the dashboard.</li>
+                    <li>Open the link Ephemera posts on the pull request. From now on, every push updates it by itself.</li>
+                </ol>
+            </div>
+        </section>
+
+        <section>
+            <div class="wrap">
+                <div class="callout">
+                    <h2 style="font-size:20px;">Free during the beta</h2>
+                    <p>Ephemera is in beta. It's free while it is, features may change, and every preview is removed when its pull request closes. Signing in only shares your GitHub profile and email address; repository access comes from the GitHub App you install on the repositories you choose.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="wrap">
+            <span>Ephemera: preview environments for every pull request.</span>
+            <a href="https://github.com/sabiut/ephemera" target="_blank" rel="noopener">Source on GitHub</a>
         </div>
-
-        <p class="footer">Secure authentication via GitHub OAuth</p>
-    </div>
+    </footer>
 </body>
 </html>

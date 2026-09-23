@@ -251,7 +251,7 @@ class AIDeploymentService:
             # file, so generated manifests name this commit's images.
             interpolated = None
             if repo_context.compose_content:
-                interpolated = interpolate(repo_context.compose_content, commit_variables(ref))
+                interpolated = interpolate(repo_context.compose_content, commit_variables(ref, repo_full_name))
                 if interpolated.errors:
                     return self._fallback(
                         installation_id, repo_full_name, namespace, ref,

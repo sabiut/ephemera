@@ -179,7 +179,7 @@ The webhook usually arrives before CI has pushed the image. While a pod is faili
 
 The cluster pulls the image, so it must be able to reach the registry: make a GitHub Container Registry package public once (package settings, then "Change visibility"), or use a registry the cluster's nodes are authorised for.
 
-Supported substitutions follow docker compose: `${VAR}`, `$VAR`, `${VAR:-default}`, `${VAR-default}`, `${VAR:?message}` (fails the preview with that message), and `$$` for a literal `$`. Ephemera provides `EPHEMERA_SHA` and `EPHEMERA_SHA_SHORT` (7 characters); other unset variables become empty strings and are listed in the PR comment. A service with a `build:` section whose image is not tagged per commit still deploys, but the comment warns that it may not contain the PR's changes.
+Supported substitutions follow docker compose: `${VAR}`, `$VAR`, `${VAR:-default}`, `${VAR-default}`, `${VAR:?message}` (fails the preview with that message), and `$$` for a literal `$`. Ephemera provides `EPHEMERA_SHA`, `EPHEMERA_SHA_SHORT` (7 characters) and `EPHEMERA_REPOSITORY` (the repository's `owner/name` in lowercase, so `image: ghcr.io/${EPHEMERA_REPOSITORY}:${EPHEMERA_SHA}` keeps working in forks); other unset variables become empty strings and are listed in the PR comment. A service with a `build:` section whose image is not tagged per commit still deploys, but the comment warns that it may not contain the PR's changes.
 
 ## AI manifest generation
 

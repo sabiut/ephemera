@@ -1,14 +1,16 @@
+import html
 import logging
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import auth, credentials, environments, health, repositories, tokens, webhooks
 from app.config import get_settings
+from app.services.github import github_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,10 +55,37 @@ app.include_router(tokens.router, prefix="/api/v1", tags=["tokens"])
 app.include_router(repositories.router, prefix="/api/v1", tags=["repositories"])
 
 
+def _memory_label(quantity: str) -> str:
+    """Kubernetes quantity to prose: "2Gi" -> "2 GiB"."""
+    for suffix, unit in (("Gi", "GiB"), ("Mi", "MiB"), ("G", "GB"), ("M", "MB")):
+        if quantity.endswith(suffix):
+            return f"{quantity[:-len(suffix)]} {unit}"
+    return quantity
+
+
+def _install_url() -> str:
+    try:
+        return github_service.app_install_url() or "/auth/github/login"
+    except Exception:
+        return "/auth/github/login"
+
+
 @app.get("/", include_in_schema=False)
-async def root():
-    """Serve landing page"""
-    return FileResponse(os.path.join(static_dir, "index.html"))
+def root():  # sync: the install link may ask GitHub, so run it off the event loop
+    """
+    Serve the landing page with the limits this server actually enforces, so
+    what it promises cannot drift from the cluster's quotas.
+    """
+    with open(os.path.join(static_dir, "index.html"), encoding="utf-8") as f:
+        page = f.read()
+    for key, value in {
+        "{{PREVIEW_CPU}}": settings.preview_cpu_quota,
+        "{{PREVIEW_MEMORY}}": _memory_label(settings.preview_memory_quota),
+        "{{PREVIEW_PODS}}": settings.preview_pod_quota,
+        "{{INSTALL_URL}}": _install_url(),
+    }.items():
+        page = page.replace(key, html.escape(str(value), quote=True))
+    return HTMLResponse(page)
 
 
 @app.get("/dashboard", include_in_schema=False)

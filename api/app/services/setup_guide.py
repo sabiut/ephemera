@@ -74,7 +74,7 @@ def build_guide(repo: InstalledRepository, compose_text: Optional[str]) -> Setup
         guide.message = "Add a docker-compose.yml first; the setup is generated from its services."
         return guide
     try:
-        compose = yaml.safe_load(interpolate(compose_text, commit_variables(_PROBE_SHA)).text) or {}
+        compose = yaml.safe_load(interpolate(compose_text, commit_variables(_PROBE_SHA, repo.full_name)).text) or {}
     except yaml.YAMLError:
         guide.status = "invalid"
         guide.message = "docker-compose.yml isn't valid YAML, so the setup can't be generated from it."
