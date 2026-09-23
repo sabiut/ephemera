@@ -118,7 +118,6 @@ let cachedEnvironments = [];
 let environmentsError = null;
 let cachedCredentials = [];
 let cachedTokens = [];
-let refreshInterval = null;
 let isAdmin = false;
 let cachedRepositories = null;   // null: not loaded or failed
 let repositoriesError = null;
@@ -137,7 +136,6 @@ async function loadView(view) {
         case 'environments':
             await loadEnvironments();
             renderEnvironments();
-            startAutoRefresh();
             break;
         case 'credentials':
             await loadCredentials();
@@ -150,15 +148,41 @@ async function loadView(view) {
     }
 }
 
+// One refresh loop for every view. While anything is in flight (a preview
+// provisioning, updating or being torn down, or a PR whose preview was just
+// requested) it polls every 10 seconds; otherwise every 30. Before this only
+// the Environments page refreshed, so after "Create preview" the
+// Repositories and Overview pages kept showing "Provisioning" for good.
+const PENDING_STATUSES = ['pending', 'provisioning', 'updating', 'destroying'];
+let selectedRepo = null;          // "owner/repo" shown on the Repositories page
+let cachedPulls = [];
+let refreshTimer = null;
+
+function workPending() {
+    const envBusy = cachedEnvironments.some(e => PENDING_STATUSES.includes((e.status || '').toLowerCase()));
+    const pullBusy = cachedPulls.some(p => PENDING_STATUSES.includes(p.environment_status));
+    return envBusy || pullBusy;
+}
+
 function startAutoRefresh() {
-    if (refreshInterval) clearInterval(refreshInterval);
-    refreshInterval = setInterval(async () => {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(async () => {
         const hash = window.location.hash.slice(1) || 'overview';
-        if (hash === 'environments') {
-            await loadEnvironments();
-            renderEnvironments();
+        try {
+            if (hash === 'overview') {
+                await loadEnvironments();
+                renderOverview();
+            } else if (hash === 'environments') {
+                await loadEnvironments();
+                renderEnvironments();
+            } else if (hash === 'repositories' && selectedRepo) {
+                const [owner, repo] = selectedRepo.split('/');
+                await loadPulls(owner, repo);
+            }
+        } finally {
+            startAutoRefresh();
         }
-    }, 30000);
+    }, workPending() ? 10000 : 30000);
 }
 
 async function loadEnvironments() {
@@ -323,7 +347,15 @@ function renderGettingStarted() {
     const card = document.getElementById('gettingStarted');
     if (!card) return;
     const hasRepo = Array.isArray(cachedRepositories) && cachedRepositories.length > 0;
-    const hasPreview = cachedEnvironments.some(e => (e.status || '').toLowerCase() === 'ready');
+    // "Has ever had a working preview": a record with a deployment time, even
+    // if since destroyed, or a per-browser flag set the first time that was
+    // seen (old destroyed records are cleaned up after a week).
+    let onboarded = false;
+    try { onboarded = localStorage.getItem('ephemera_onboarded') === '1'; } catch (e) { /* storage blocked */ }
+    const hasPreview = onboarded || cachedEnvironments.some(e => e.last_deployed_at || (e.status || '').toLowerCase() === 'ready');
+    if (hasPreview && !onboarded) {
+        try { localStorage.setItem('ephemera_onboarded', '1'); } catch (e) { /* storage blocked */ }
+    }
     card.hidden = hasPreview;
     if (hasPreview) return;
     const install = installUrl
@@ -369,6 +401,7 @@ function renderRepositories() {
 }
 
 async function selectRepository(fullName) {
+    selectedRepo = fullName;
     const [owner, repo] = fullName.split('/');
     const setupCard = document.getElementById('repoSetupCard');
     const pullsCard = document.getElementById('repoPullsCard');
@@ -422,6 +455,7 @@ async function loadPulls(owner, repo) {
     const body = document.getElementById('repoPullsBody');
     try {
         const pulls = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`);
+        cachedPulls = pulls || [];
         if (!pulls.length) {
             body.innerHTML = '<div class="empty-state"><p>No open pull requests. Open one and its preview is created automatically.</p></div>';
             return;
@@ -454,9 +488,10 @@ async function createPreview(fullName, prNumber, button) {
             method: 'POST',
             body: JSON.stringify({ repository_full_name: fullName, pr_number: prNumber }),
         });
-        showToast(`Preview requested for #${prNumber}. It appears on the pull request when ready.`);
+        showToast(`Preview requested for #${prNumber}. This list updates as it deploys.`);
         const [owner, repo] = fullName.split('/');
         await loadPulls(owner, repo);
+        startAutoRefresh();
     } catch (e) {
         showToast('Could not create preview: ' + e.message, 'error');
         if (button) { button.disabled = false; button.textContent = 'Create preview'; }
@@ -490,7 +525,7 @@ function renderCredentials() {
                 <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
                 </svg>
-                <p>No cloud credentials yet. Add your credentials to enable environment provisioning.</p>
+                <p>No stored credentials. Previews from pull requests do not need any: Ephemera deploys them with its own cluster access. Store credentials here only for your own CI workflows that fetch them with an API token.</p>
                 <button class="btn btn-primary" onclick="openModal('credentialModal')">Add Credentials</button>
             </div>
         `;
@@ -695,4 +730,5 @@ function escapeHtml(text) {
 window.addEventListener('DOMContentLoaded', () => {
     loadUserInfo();
     navigate();
+    startAutoRefresh();
 });
