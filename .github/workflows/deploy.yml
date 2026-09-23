@@ -308,6 +308,15 @@ jobs:
 
         DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
 
+        # Mask the credentials before anything can print them. Values written
+        # to GITHUB_ENV are shown in every later step's "env:" block, and this
+        # repository's Actions logs are public: REDIS_URL, with the Redis AUTH
+        # string, appeared there in full. Masking the parts as well as the
+        # URLs also hides them if they ever appear on their own.
+        for value in "$REDIS_AUTH" "$DB_PASSWORD_RAW" "$DB_PASSWORD" "$REDIS_URL" "$DATABASE_URL"; do
+          if [ -n "$value" ]; then echo "::add-mask::${value}"; fi
+        done
+
         # Export to GitHub environment
         {
           echo "REDIS_URL<<EOF"
