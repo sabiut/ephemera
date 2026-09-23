@@ -75,7 +75,11 @@ function closeModal(id) {
 document.addEventListener('click', (e) => {
     if (e.target.classList.contains('modal-overlay')) {
         e.target.classList.remove('active');
+        if (e.target.id === 'envDetailModal') detailEnvId = null;
     }
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && detailEnvId !== null) closeEnvironmentDetail();
 });
 
 // ─── Sidebar Toggle (Mobile) ────────────────────────────
@@ -169,11 +173,15 @@ function startAutoRefresh() {
     refreshTimer = setTimeout(async () => {
         const hash = window.location.hash.slice(1) || 'overview';
         try {
-            if (hash === 'overview') {
+            if (detailEnvId !== null) {
                 await loadEnvironments();
+                renderEnvironmentDetail();
+            }
+            if (hash === 'overview') {
+                if (detailEnvId === null) await loadEnvironments();
                 renderOverview();
             } else if (hash === 'environments') {
-                await loadEnvironments();
+                if (detailEnvId === null) await loadEnvironments();
                 renderEnvironments();
             } else if (hash === 'repositories' && selectedRepo) {
                 const [owner, repo] = selectedRepo.split('/');
@@ -252,11 +260,13 @@ function timeAgo(dateStr) {
     return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+// A failed row leads with what happened; the explanation, next step, full
+// error and Retry are in the details view (not a hover tooltip, which
+// phones cannot show).
 function envErrorHTML(env) {
-    if ((env.status || '').toLowerCase() !== 'failed' || !env.error_message) return '';
-    const full = env.error_message;
-    const short = full.length > 140 ? full.slice(0, 140) + '…' : full;
-    return `<div class="text-muted text-sm" title="${escapeHtml(full)}" style="margin-top:4px;max-width:420px;">${escapeHtml(short)}</div>`;
+    if ((env.status || '').toLowerCase() !== 'failed') return '';
+    const title = (env.diagnosis && env.diagnosis.title) || 'Preview failed';
+    return `<div class="text-sm" style="margin-top:4px;"><a class="row-link" onclick="openEnvironment(${env.id})">${escapeHtml(title)}: see what to do</a></div>`;
 }
 
 function envPreviewHTML(env) {
@@ -309,6 +319,7 @@ function envTableHTML(envs) {
                     <th>Preview</th>
                     <th>Commit</th>
                     <th>Created</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
@@ -322,11 +333,122 @@ function envTableHTML(envs) {
                         <td>${envPreviewHTML(env)}</td>
                         <td class="mono text-muted text-sm">${escapeHtml((env.commit_sha || '').slice(0, 8) || '-')}</td>
                         <td class="text-muted text-sm">${timeAgo(env.created_at)}</td>
+                        <td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="openEnvironment(${env.id})">Details</button></td>
                     </tr>
                 `).join('')}
             </tbody>
         </table>
     `;
+}
+
+// ─── Environment details ────────────────────────────────
+
+let detailEnvId = null;
+let detailDeployments = [];
+
+// Backticks in diagnosis text mark names (services, files); show them as code.
+function richText(text) {
+    return escapeHtml(text || '').replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+async function openEnvironment(id) {
+    detailEnvId = id;
+    detailDeployments = [];
+    renderEnvironmentDetail();
+    openModal('envDetailModal');
+    try {
+        detailDeployments = await apiCall(`/api/v1/environments/${id}/deployments?limit=5`) || [];
+    } catch (e) {
+        detailDeployments = null;
+    }
+    if (detailEnvId === id) renderEnvironmentDetail();
+}
+
+function closeEnvironmentDetail() {
+    detailEnvId = null;
+    closeModal('envDetailModal');
+}
+
+function renderEnvironmentDetail() {
+    const env = cachedEnvironments.find(e => e.id === detailEnvId);
+    const body = document.getElementById('envDetailBody');
+    const footer = document.getElementById('envDetailFooter');
+    if (!document.getElementById('envDetailModal').classList.contains('active') && detailEnvId === null) return;
+    if (!env) {
+        body.innerHTML = '<p class="text-muted">This preview is no longer in your list.</p>';
+        footer.innerHTML = '<button class="btn btn-ghost" onclick="closeEnvironmentDetail()">Close</button>';
+        return;
+    }
+    const status = (env.status || '').toLowerCase();
+    const repo = env.repository_full_name;
+    const sha = env.commit_sha || '';
+    document.getElementById('envDetailTitle').textContent = `${repo} #${env.pr_number}`;
+
+    const meta = `<div class="detail-meta">
+        <div><div class="label">Status</div><div class="value">${statusBadge(env.status)}</div></div>
+        <div><div class="label">Commit</div><div class="value mono"><a href="https://github.com/${escapeHtml(repo)}/commit/${escapeHtml(sha)}" target="_blank" class="text-muted">${escapeHtml(sha.slice(0, 7) || '-')}</a></div></div>
+        <div><div class="label">Branch</div><div class="value mono">${escapeHtml(env.branch_name || '-')}</div></div>
+        <div><div class="label">Opened by</div><div class="value">${escapeHtml(env.owner_login || '-')}</div></div>
+        <div><div class="label">Last change</div><div class="value">${timeAgo(env.updated_at || env.created_at)}</div></div>
+    </div>`;
+    const prTitle = env.pr_title ? `<p style="color:#e5e5e5;margin:0 0 16px;">${escapeHtml(env.pr_title)}</p>` : '';
+
+    let main = '';
+    if (status === 'failed') {
+        const d = env.diagnosis || { title: 'Preview failed', explanation: '', action: '', links: [] };
+        const links = (d.links || []).map(l =>
+            `<a class="btn btn-ghost btn-sm" href="${escapeHtml(l.url)}" target="_blank">${escapeHtml(l.label)}</a>`).join('');
+        main = `<div class="diagnosis">
+            <div class="diagnosis-title">${escapeHtml(d.title)}</div>
+            ${d.explanation ? `<p>${richText(d.explanation)}</p>` : ''}
+            ${d.action ? `<p class="next"><strong>What to do:</strong> ${richText(d.action)}</p>` : ''}
+            ${links ? `<div class="diagnosis-links">${links}</div>` : ''}
+        </div>
+        ${env.error_message ? `<details class="tech-details"><summary>Technical details</summary><pre>${escapeHtml(env.error_message)}</pre></details>` : ''}`;
+    } else if (status === 'ready') {
+        main = `<div class="detail-note">Ready. ${envPreviewHTML(env)}</div>`;
+    } else if (PENDING_STATUSES.includes(status)) {
+        main = `<div class="detail-note">${status === 'destroying' ? 'Being removed.' : `Deploying commit <code>${escapeHtml(sha.slice(0, 7))}</code>.`} This updates automatically.</div>`;
+    } else if (status === 'destroyed') {
+        main = '<div class="detail-note">Removed. The pull request was closed or merged.</div>';
+    }
+
+    let history = '';
+    if (detailDeployments === null) {
+        history = '<p class="text-muted text-sm">Could not load earlier attempts.</p>';
+    } else if (detailDeployments.length) {
+        history = `<div class="section-label">Recent attempts</div><ul class="history">${detailDeployments.map(d => {
+            const why = d.status === 'failed' && d.error_message ? `<span class="why">${escapeHtml(d.error_message.split('\n')[0])}</span>` : '';
+            return `<li><span class="mono">${escapeHtml(d.commit_sha.slice(0, 7))}</span>${statusBadge(d.status === 'success' ? 'ready' : d.status)}<span class="text-muted">${timeAgo(d.created_at)}</span>${why}</li>`;
+        }).join('')}</ul>`;
+    }
+    body.innerHTML = prTitle + meta + main + history;
+
+    const retry = status === 'failed'
+        ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Retry preview</button>` : '';
+    footer.innerHTML = `<button class="btn btn-ghost" onclick="closeEnvironmentDetail()">Close</button>${retry}`;
+}
+
+async function retryEnvironment(id, button) {
+    const env = cachedEnvironments.find(e => e.id === id);
+    if (!env) return;
+    if (button) { button.disabled = true; button.textContent = 'Retrying…'; }
+    try {
+        await apiCall('/api/v1/environments/', {
+            method: 'POST',
+            body: JSON.stringify({ repository_full_name: env.repository_full_name, pr_number: env.pr_number }),
+        });
+        showToast(`Retrying #${env.pr_number}. This view updates as it deploys.`);
+        await loadEnvironments();
+        renderEnvironmentDetail();
+        const hash = window.location.hash.slice(1) || 'overview';
+        if (hash === 'overview') renderOverview();
+        if (hash === 'environments') renderEnvironments();
+        startAutoRefresh();
+    } catch (e) {
+        showToast('Could not retry: ' + e.message, 'error');
+        if (button) { button.disabled = false; button.textContent = 'Retry preview'; }
+    }
 }
 
 // ─── Repositories and onboarding ────────────────────────

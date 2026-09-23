@@ -9,7 +9,8 @@ from app.crud import environment as environment_crud
 from app.crud import user as user_crud
 from app.database import get_db
 from app.models import User
-from app.schemas.environment import EnvironmentCreate, EnvironmentResponse
+from app.crud import deployment as deployment_crud
+from app.schemas.environment import DeploymentResponse, EnvironmentCreate, EnvironmentResponse
 from app.services import repo_access
 from app.services.github import GitHubUnavailable, github_service
 from app.services.provisioning import EnvironmentRequest, request_environment
@@ -63,6 +64,24 @@ async def get_environment(
     if not environment:
         raise HTTPException(status_code=404, detail="Environment not found")
     return environment
+
+
+@router.get("/{environment_id}/deployments", response_model=List[DeploymentResponse])
+async def list_environment_deployments(
+    environment_id: int,
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Recent deployment attempts for one of the caller's visible environments, newest first."""
+    admin = is_admin(current_user)
+    environment = environment_crud.get_visible_environment(
+        db, current_user, admin, environment_id=environment_id,
+        repo_names=None if admin else repo_access.accessible_repo_names(current_user, admin),
+    )
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+    return deployment_crud.get_deployments_by_environment(db, environment_id, limit=limit)
 
 
 @router.get("/namespace/{namespace}", response_model=EnvironmentResponse)
