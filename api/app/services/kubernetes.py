@@ -214,6 +214,16 @@ class KubernetesService:
         match = (dep.spec.selector.match_labels if dep.spec and dep.spec.selector else None) or {}
         if not match:
             return []
+        # Right after an update the Deployment controller has not yet created
+        # the new ReplicaSet or bumped the revision annotation, so "current
+        # revision" still names the previous rollout. Judging that rollout's
+        # pods failed a retry in 14 seconds on a crash-looping pod the update
+        # was replacing. Until the controller has observed this generation,
+        # there are no current pods to judge.
+        generation = getattr(dep.metadata, "generation", None) if dep.metadata else None
+        observed = getattr(dep.status, "observed_generation", None) if dep.status else None
+        if generation is not None and (observed is None or observed < generation):
+            return []
         selector = ",".join(f"{k}={v}" for k, v in sorted(match.items()))
         pods = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=selector).items
 
