@@ -1,9 +1,12 @@
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import requests
 from github import Auth, Github, GithubIntegration
 from github.GithubException import GithubException, UnknownObjectException
+from urllib3.exceptions import NewConnectionError
 
 from app.config import get_settings
 from app.models.environment import build_namespace
@@ -61,6 +64,56 @@ class PullRequestInfo:
     author_id: int
     author_login: str
     author_avatar_url: Optional[str]
+
+
+# Status updates and comments are the only way a developer hears about a
+# preview. A short network blip (a preemptible node being replaced, cluster
+# DNS timing out) used to lose them for good: live, a "Not deployed" status
+# failed with "Temporary failure in name resolution" while fetching the
+# installation token. Three attempts, about eight seconds apart in total.
+RETRY_DELAYS = (2, 6)
+_sleep = time.sleep
+
+
+def _never_sent(e: Exception) -> bool:
+    """The request failed before reaching GitHub (DNS, refused, connect timeout)."""
+    if isinstance(e, requests.exceptions.ConnectTimeout):
+        return True
+    if isinstance(e, requests.exceptions.ConnectionError):
+        seen = set()
+        cur = e
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if isinstance(cur, NewConnectionError):  # includes NameResolutionError
+                return True
+            reason = getattr(cur, "reason", None)
+            cur = reason if isinstance(reason, BaseException) else (cur.args[0] if cur.args and isinstance(cur.args[0], BaseException) else None)
+    return False
+
+
+def _transient(e: Exception, idempotent: bool) -> bool:
+    if _never_sent(e):
+        return True
+    if not idempotent:
+        return False
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    return isinstance(e, GithubException) and (e.status or 0) >= 500
+
+
+def _with_retries(call, what: str, idempotent: bool) -> bool:
+    """Run a GitHub notification, retrying transient failures. Never raises."""
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        try:
+            return call()
+        except Exception as e:
+            if attempt < len(RETRY_DELAYS) and _transient(e, idempotent):
+                logger.warning(f"Could not {what} (attempt {attempt + 1}): {e}; retrying in {RETRY_DELAYS[attempt]}s")
+                _sleep(RETRY_DELAYS[attempt])
+                continue
+            logger.error(f"Failed to {what}: {e}")
+            return False
+    return False
 
 
 class GitHubService:
@@ -211,19 +264,16 @@ class GitHubService:
         comment: str
     ) -> bool:
         """Post an issue comment on a pull request. Returns True on success."""
-        try:
+        def post():
             client = self.get_installation_client(installation_id)
             if not client:
                 return False
-
-            repo = client.get_repo(repo_full_name)
-            pr = repo.get_pull(pr_number)
-            pr.create_issue_comment(comment)
+            client.get_repo(repo_full_name).get_pull(pr_number).create_issue_comment(comment)
             logger.info(f"Posted comment to PR #{pr_number} in {repo_full_name}")
             return True
-        except Exception as e:
-            logger.error(f"Failed to post comment: {str(e)}")
-            return False
+
+        # A comment is not idempotent: only retried when it provably never left.
+        return _with_retries(post, f"post comment on {repo_full_name}#{pr_number}", idempotent=False)
 
     def update_pr_status(
         self,
@@ -236,23 +286,20 @@ class GitHubService:
         target_url: Optional[str] = None
     ) -> bool:
         """Set a commit status (pending/success/failure/error). Returns True on success."""
-        try:
+        def update():
             client = self.get_installation_client(installation_id)
             if not client:
                 return False
-
-            repo = client.get_repo(repo_full_name)
-            commit = repo.get_commit(commit_sha)
-
             kwargs = dict(state=state, description=description[:140], context=context)
             if target_url:
                 kwargs["target_url"] = target_url
-            commit.create_status(**kwargs)
+            client.get_repo(repo_full_name).get_commit(commit_sha).create_status(**kwargs)
             logger.info(f"Updated status for {commit_sha} to {state}")
             return True
-        except Exception as e:
-            logger.error(f"Failed to update status: {str(e)}")
-            return False
+
+        # A status with the same context replaces the previous one, so a
+        # repeat is harmless.
+        return _with_retries(update, f"update status of {commit_sha[:7]}", idempotent=True)
 
     @staticmethod
     def get_installation_id_from_payload(payload: Dict[str, Any]) -> Optional[int]:
