@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     # How long a destroy waits for Kubernetes to finish removing the namespace
     # before leaving it as DESTROYING for the hourly cleanup to confirm.
     preview_destroy_confirm_seconds: int = 180
+    # One task changes a preview at a time. The lock outlives the Celery
+    # hard limit (30 min) only slightly, so a killed worker cannot wedge it;
+    # waiting tasks give up well before their own soft limit.
+    environment_lock_seconds: int = 1860
+    environment_lock_wait_seconds: int = 900
 
     # Preview namespace quotas
     preview_cpu_quota: str = "1"

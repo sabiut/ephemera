@@ -169,6 +169,7 @@ def handle_pull_request_synchronize(payload: PullRequestWebhook):
         deployment = deployment_crud.create_deployment(db, environment, commit_sha)
         logger.info(f"Created deployment {deployment.id} for updated PR #{pr.number}")
         environment_id = environment.id
+        deployment_id = deployment.id
         namespace = environment.namespace
         env_url = environment.environment_url
 
@@ -178,6 +179,7 @@ def handle_pull_request_synchronize(payload: PullRequestWebhook):
         installation_id=installation_id,
         repo_full_name=repo.full_name,
         pr_number=pr.number,
+        deployment_id=deployment_id,
     )
 
     if installation_id:

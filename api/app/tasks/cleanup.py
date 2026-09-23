@@ -270,8 +270,8 @@ def retry_failed_environments(self, max_age_hours: int = 1):
             if state != "open":
                 skipped += 1  # could not ask GitHub; never retry blind
                 continue
-            deployment_crud.create_deployment(self.db, env, env.commit_sha)
-            provision_environment.delay(environment_id=env.id)
+            record = deployment_crud.create_deployment(self.db, env, env.commit_sha)
+            provision_environment.delay(environment_id=env.id, commit_sha=env.commit_sha, deployment_id=record.id)
             retried.append(env.id)
             logger.info(f"Retrying environment {env.id} once after transient failure: {env.error_message}")
         return {"success": True, "retry_count": len(retried), "retried": retried, "skipped": skipped}
