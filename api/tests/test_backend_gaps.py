@@ -77,9 +77,12 @@ def task_db(db_session, monkeypatch):
 
 @pytest.fixture()
 def queued(monkeypatch):
+    from types import SimpleNamespace
+    import app.services.github as gh
     calls = []
     import app.tasks.environment as env_tasks
     monkeypatch.setattr(env_tasks.provision_environment, "delay", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(gh.github_service, "get_pull_request", lambda *a: SimpleNamespace(state="open"))
     return calls
 
 

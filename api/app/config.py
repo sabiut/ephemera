@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     # Extra time allowed while a pod waits for an image tagged with the PR's
     # commit, i.e. while the repository's CI is still building it.
     preview_image_wait_seconds: int = 600
+    # How long a destroy waits for Kubernetes to finish removing the namespace
+    # before leaving it as DESTROYING for the hourly cleanup to confirm.
+    preview_destroy_confirm_seconds: int = 180
 
     # Preview namespace quotas
     preview_cpu_quota: str = "1"

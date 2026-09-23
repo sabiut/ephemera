@@ -101,8 +101,11 @@ def handle_pull_request_closed(payload: PullRequestWebhook):
         if not environment:
             logger.warning(f"No environment found for PR #{pr.number}, skipping cleanup")
             return
-        if not environment.is_active and environment.status != EnvironmentStatus.PENDING:
-            logger.info(f"Environment {environment.namespace} already {environment.status.value}, skipping")
+        # Anything but DESTROYED is torn down: a FAILED preview usually still
+        # has a namespace full of crash-looping pods, and a DESTROYING one may
+        # have had its first deletion attempt fail.
+        if environment.status == EnvironmentStatus.DESTROYED:
+            logger.info(f"Environment {environment.namespace} already destroyed, skipping")
             return
         environment_id = environment.id
         namespace = environment.namespace
