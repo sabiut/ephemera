@@ -8,7 +8,7 @@ This service handles:
 
 import logging
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Set
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -331,6 +331,7 @@ class KubernetesService:
         image_wait_seconds: int = 0,
         commit_markers: Tuple[str, ...] = (),
         on_waiting_for_image: Optional[Callable[[str, str], None]] = None,
+        on_image_available: Optional[Callable[[], None]] = None,
     ) -> Tuple[List[str], Dict[str, str]]:
         """
         Block until every named Deployment has all its replicas ready.
@@ -354,6 +355,10 @@ class KubernetesService:
         ready: List[str] = []
         fatal: Dict[str, str] = {}
         announced = False
+        # Services that waited for a commit image, and whether their image
+        # has since been pulled (a container of theirs has started).
+        image_waiters: Set[str] = set()
+        image_available_reported = False
         # Once any pod has waited for a commit image, the longer deadline
         # stays in force: after a pod is restarted to retry the pull, its
         # replacement shows ContainerCreating rather than a pull error, and
@@ -393,6 +398,7 @@ class KubernetesService:
                     if kind == "image":
                         waiting_for_image = True
                         image_wait_started = True
+                        image_waiters.add(name)
                         if not announced and on_waiting_for_image:
                             announced = True
                             try:
@@ -407,6 +413,13 @@ class KubernetesService:
                                 logger.info(f"Retrying image pull for {name} ({detail})")
                             except ApiException as e:
                                 logger.warning(f"Could not restart pod {pod.metadata.name}: {e.status}")
+            if image_waiters and not waiting_for_image and not image_available_reported and on_image_available:
+                if all(n not in pending or self._container_started(namespace, n) for n in image_waiters):
+                    image_available_reported = True
+                    try:
+                        on_image_available()
+                    except Exception as e:
+                        logger.warning(f"on_image_available callback failed: {e}")
             for name in fatal:
                 pending.discard(name)
             if not pending:
@@ -420,6 +433,19 @@ class KubernetesService:
         for name in sorted(pending):
             problems[name] = self._deployment_problem(namespace, name, commit_markers)
         return ready, problems
+
+    def _container_started(self, namespace: str, name: str) -> bool:
+        """Whether any current pod of the Deployment has a container running or finished (its image was pulled)."""
+        try:
+            pods = self._pods_for(namespace, name)
+        except ApiException:
+            return False
+        for pod in pods:
+            for cs in (pod.status.container_statuses or []) if pod.status else []:
+                state = cs.state
+                if state and (getattr(state, "running", None) or getattr(state, "terminated", None)):
+                    return True
+        return False
 
     def _deployment_problem(self, namespace: str, name: str, commit_markers: Tuple[str, ...] = ()) -> str:
         """Best-effort explanation of why a Deployment's pods are not ready."""

@@ -120,6 +120,14 @@ def _run_deployment(
     if latest:
         deployment_crud.update_deployment_status(db, latest, DeploymentStatus.IN_PROGRESS)
 
+    def stage(name: str, detail: Optional[str] = None) -> None:
+        # Progress for the dashboard; never allowed to break a deploy.
+        try:
+            environment_crud.set_stage(db, environment_id, name, detail, commit_sha=commit_sha)
+        except Exception as e:
+            logger.warning(f"Could not record stage {name} for environment {environment_id}: {e}")
+
+    stage("deploying", "Reading docker-compose.yml and applying the services")
     result = _active_deployment_service().deploy_application(
         installation_id=installation_id,
         repo_full_name=repo_full_name,
@@ -160,6 +168,7 @@ def _run_deployment(
             )
         else:
             def waiting_for_image(service: str, image: str) -> None:
+                stage("waiting_for_image", f"{service} image built from {commit_sha[:7]} is not published yet")
                 github_service.update_pr_status(
                     installation_id=installation_id,
                     repo_full_name=repo_full_name,
@@ -168,12 +177,14 @@ def _run_deployment(
                     description=f"Waiting for {service} image built from {commit_sha[:7]}",
                 )
 
+            stage("starting", f"Starting {', '.join(services)}")
             ready, problems = kubernetes_service.wait_for_deployments_ready(
                 namespace, services,
                 timeout_seconds=settings.preview_ready_timeout_seconds,
                 image_wait_seconds=settings.preview_image_wait_seconds,
                 commit_markers=(commit_sha, commit_sha[:7]),
                 on_waiting_for_image=waiting_for_image,
+                on_image_available=lambda: stage("starting", f"Image published; starting {', '.join(services)}"),
             )
             if problems:
                 result["success"] = False
@@ -181,6 +192,7 @@ def _run_deployment(
                     f"{name} ({reason})" for name, reason in problems.items()
                 )
             else:
+                stage("checking_https", "Checking that the preview links answer over HTTPS")
                 unreachable = probe_urls(
                     result.get("service_urls") or {},
                     timeout_seconds=settings.preview_ready_timeout_seconds,
@@ -328,6 +340,8 @@ def _provision_body(
     commit_sha = commit_sha or environment.commit_sha
 
     environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.PROVISIONING)
+    environment_crud.set_stage(self.db, environment_id, "preparing", "Creating the preview's namespace",
+                               commit_sha=commit_sha)
 
     try:
         labels = {

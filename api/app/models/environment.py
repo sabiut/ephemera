@@ -17,6 +17,12 @@ class EnvironmentStatus(str, enum.Enum):
     FAILED = "failed"           # Creation/update failed
 
 
+# Deployment stages in order. "waiting_for_image" only happens when a
+# service's commit image is not published yet.
+STAGES = ("queued", "preparing", "deploying", "waiting_for_image", "starting", "checking_https",
+          "ready", "failed", "destroying", "destroyed")
+
+
 class Environment(Base):
     __tablename__ = "environments"
     __table_args__ = (
@@ -56,6 +62,14 @@ class Environment(Base):
     # environment lock: a deploy queued before the close must not bring the
     # preview back, and a teardown queued before a reopen must not remove it.
     closed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Progress of the current deployment, for the dashboard: a stage key
+    # (see STAGES), a human detail such as which image it waits for, when the
+    # stage began, and when this deployment was queued.
+    stage = Column(String, nullable=True)
+    stage_detail = Column(String, nullable=True)
+    stage_started_at = Column(DateTime(timezone=True), nullable=True)
+    deploy_started_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     deployments = relationship("Deployment", back_populates="environment", cascade="all, delete-orphan")
