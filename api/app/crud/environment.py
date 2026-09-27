@@ -218,6 +218,7 @@ def reset_environment(
     environment.destroyed_at = None
     _queue(environment)
     environment.closed_at = None  # a reopen authorizes provisioning again
+    environment.removal_reason = None
     db.commit()
     db.refresh(environment)
     return environment
@@ -225,8 +226,16 @@ def reset_environment(
 
 def mark_closed(db: Session, environment: Environment) -> Environment:
     """Record that the PR closed, so queued deploys stand down."""
+    changed = False
     if environment.closed_at is None:
         environment.closed_at = datetime.now(timezone.utc)
+        changed = True
+    # A preview already removed for another reason (it expired) is now gone
+    # because its PR closed: it can no longer be recreated.
+    if environment.removal_reason and environment.removal_reason != "closed":
+        environment.removal_reason = "closed"
+        changed = True
+    if changed:
         db.commit()
         db.refresh(environment)
     return environment

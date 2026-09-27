@@ -63,6 +63,11 @@ class Environment(Base):
     # environment lock: a deploy queued before the close must not bring the
     # preview back, and a teardown queued before a reopen must not remove it.
     closed_at = Column(DateTime(timezone=True), nullable=True)
+    # Why the preview was removed: "closed" (its PR closed or merged) or
+    # "expired" (idle while the PR stayed open, so it can be recreated).
+    # Set before the namespace is deleted and kept through cleanup retries,
+    # so a slow deletion does not lose it; cleared when recreated.
+    removal_reason = Column(String, nullable=True)
 
     # Progress of the current deployment, for the dashboard: a stage key
     # (see STAGES), a human detail such as which image it waits for, when the

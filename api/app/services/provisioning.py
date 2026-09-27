@@ -5,10 +5,12 @@ Both the GitHub webhook handler and the REST API call this, so the rules for
 reusing a record after a PR is reopened live in one place.
 """
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.crud import deployment as deployment_crud
@@ -41,6 +43,20 @@ class PreviewLimitReached(Exception):
             "Close one of those pull requests, or wait for an idle one to expire, then push a commit "
             "or retry the preview."
         )
+
+
+def _admission_lock(db: Session, repository_full_name: str) -> None:
+    """
+    Take a transaction-scoped Postgres advisory lock for the repository. It
+    is held until this request commits its new or reset environment (the
+    CRUD functions commit), so the next request's limit check sees that row.
+    SQLite, used by the tests, allows one writer at a time and has no such
+    lock.
+    """
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    key = int.from_bytes(hashlib.sha256(repository_full_name.lower().encode()).digest()[:8], "big", signed=True)
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
 
 def _check_limit(db: Session, req: "EnvironmentRequest") -> None:
@@ -80,6 +96,10 @@ def request_environment(db: Session, req: EnvironmentRequest) -> Tuple[Environme
     """
     from app.tasks.environment import provision_environment  # avoid import cycle
 
+    # Serialize admission per repository: the limit check and the insert
+    # must not interleave with another request's, or two requests can both
+    # see a free slot. Also stops two requests for one PR racing to insert.
+    _admission_lock(db, req.repository_full_name)
     existing = environment_crud.get_environment_by_pr(db, req.repository_full_name, req.pr_number)
 
     if existing and (existing.is_active or existing.status == EnvironmentStatus.PENDING):
