@@ -461,6 +461,9 @@ def _destroy_body(
         logger.error(f"Environment {environment_id} not found")
         return {"success": False, "error": "Environment not found"}
 
+    # Recorded before deletion starts: if the namespace outlives the wait
+    # below, the hourly cleanup finishes the job and the reason survives.
+    environment.removal_reason = "expired" if expired else "closed"
     environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.DESTROYING)
 
     try:

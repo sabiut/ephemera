@@ -335,7 +335,7 @@ function timeAgo(dateStr) {
 // phones cannot show).
 function envErrorHTML(env) {
     const s = (env.status || '').toLowerCase();
-    if (s === 'destroyed' && (env.error_message || '').startsWith('Expired')) {
+    if (s === 'destroyed' && env.removal_reason === 'expired') {
         return `<div class="text-sm" style="margin-top:4px;"><a class="row-link" style="color:#a5b4fc;" onclick="openEnvironment(${env.id})">Expired: recreate</a></div>`;
     }
     if (s !== 'failed') return '';
@@ -486,7 +486,7 @@ function renderEnvironmentDetail() {
     } else if (PENDING_STATUSES.includes(status)) {
         const total = env.deploy_started_at ? ` · ${sinceHTML(env.deploy_started_at)} so far` : '';
         main = `<div class="detail-note">Deploying commit <code>${escapeHtml(sha.slice(0, 7))}</code>${total}. This updates automatically.</div>${stepperHTML(env)}`;
-    } else if (status === 'destroyed' && (env.error_message || '').startsWith('Expired')) {
+    } else if (status === 'destroyed' && env.removal_reason === 'expired') {
         main = `<div class="detail-note">Removed after a period with no new commits, to free resources. Push a commit to the pull request, or recreate it here.</div>`;
     } else if (status === 'destroyed') {
         main = '<div class="detail-note">Removed. The pull request was closed or merged.</div>';
@@ -503,7 +503,7 @@ function renderEnvironmentDetail() {
     }
     body.innerHTML = prTitle + meta + main + history;
 
-    const expired = status === 'destroyed' && (env.error_message || '').startsWith('Expired');
+    const expired = status === 'destroyed' && env.removal_reason === 'expired';
     const retry = status === 'failed'
         ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Retry preview</button>`
         : expired ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Recreate preview</button>` : '';

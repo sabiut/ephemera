@@ -150,3 +150,88 @@ def test_the_landing_page_states_the_limits(client):
     page = client.get("/").text
     assert "Up to 5 previews per repository at a time." in page
     assert "no new commits for 7 days is removed; the next push brings it back." in page
+
+
+# ------------------------------------------------------------------ removal reason
+
+def test_a_slow_expiry_keeps_its_reason_through_the_cleanup_job(client, auth_headers, db, user, k8s, monkeypatch):
+    # The review's reproduction: the namespace outlived the wait, the hourly
+    # cleanup marked it destroyed, and "expired" was lost, so the dashboard
+    # said the PR was closed and hid Recreate preview.
+    env = _env(db, user, EnvironmentStatus.READY, pr=3)
+    _age(db, env, settings.preview_idle_days + 1)
+    k8s["outcome"], k8s["gone"] = env_tasks.kubernetes_service.DELETE_STARTED, False
+    _run(env_tasks.destroy_environment, environment_id=env.id, expired=True)
+    db.refresh(env)
+    assert env.status == EnvironmentStatus.DESTROYING and env.removal_reason == "expired"
+
+    env.updated_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    db.commit()
+    monkeypatch.setattr(cleanup.kubernetes_service, "delete_namespace", lambda ns: cleanup.kubernetes_service.DELETE_ABSENT)
+    monkeypatch.setattr(cleanup.kubernetes_service, "namespace_exists", lambda ns: False)
+    _run(cleanup.cleanup_stale_environments)
+    db.refresh(env)
+    assert env.status == EnvironmentStatus.DESTROYED and env.removal_reason == "expired"
+    body = client.get("/api/v1/environments/", headers=auth_headers).json()
+    assert next(e for e in body if e["id"] == env.id)["removal_reason"] == "expired"
+
+
+def test_closing_records_its_reason_and_overrides_an_expiry(db, user, k8s):
+    env = _env(db, user, EnvironmentStatus.READY, pr=3)
+    environment_crud.mark_closed(db, env)
+    _run(env_tasks.destroy_environment, environment_id=env.id)
+    db.refresh(env)
+    assert env.removal_reason == "closed"
+
+    expired = _env(db, user, EnvironmentStatus.DESTROYED, pr=4)
+    expired.removal_reason = "expired"
+    db.commit()
+    environment_crud.mark_closed(db, expired)  # the PR closed after its preview expired
+    assert expired.removal_reason == "closed"  # no longer offered for recreation
+
+
+def test_recreating_clears_the_reason(db, user, retry_calls):
+    env = _env(db, user, EnvironmentStatus.DESTROYED, pr=3)
+    env.removal_reason = "expired"
+    db.commit()
+    request_environment(db, _request(user, pr=3))
+    db.refresh(env)
+    assert env.removal_reason is None and env.status == EnvironmentStatus.PENDING
+
+
+# ------------------------------------------------------------------ admission lock
+
+class _PgSession:
+    """Just enough of a Session to see what the admission lock executes."""
+
+    def __init__(self):
+        self.executed = []
+
+    def get_bind(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+    def execute(self, statement, params):
+        self.executed.append((str(statement), params))
+
+
+def test_admission_takes_a_per_repository_transaction_lock_on_postgres():
+    from app.services.provisioning import _admission_lock
+    a, b = _PgSession(), _PgSession()
+    _admission_lock(a, "Acme/App")
+    _admission_lock(b, "acme/app")
+    assert a.executed[0][0] == "SELECT pg_advisory_xact_lock(:key)"
+    assert a.executed[0][1] == b.executed[0][1]  # same repository (any case), same lock
+    c = _PgSession()
+    _admission_lock(c, "acme/other")
+    assert c.executed[0][1] != a.executed[0][1]
+
+
+def test_the_lock_is_taken_before_the_limit_is_checked(db, user, limit, monkeypatch, retry_calls):
+    import app.services.provisioning as provisioning
+    order = []
+    monkeypatch.setattr(provisioning, "_admission_lock", lambda db, repo: order.append("lock"))
+    real_check = provisioning._check_limit
+    monkeypatch.setattr(provisioning, "_check_limit", lambda db, req: (order.append("check"), real_check(db, req)))
+    request_environment(db, _request(user, pr=3))
+    assert order == ["lock", "check"]
