@@ -353,6 +353,8 @@ def _provision_body(
         }
         if not kubernetes_service.create_namespace(environment.namespace, labels=labels):
             raise RuntimeError("Failed to create Kubernetes namespace")
+        if not kubernetes_service.secure_namespace(environment.namespace):
+            raise RuntimeError("Failed to apply the preview's network isolation")
 
         kubernetes_service.create_resource_quota(
             namespace=environment.namespace,
@@ -509,6 +511,9 @@ def _update_body(
         exists = kubernetes_service.namespace_exists(environment.namespace)
         if exists is False:
             raise RuntimeError(f"Namespace {environment.namespace} no longer exists")
+        # Previews created before the isolation baseline get it on their next deploy.
+        if not kubernetes_service.secure_namespace(environment.namespace):
+            raise RuntimeError("Failed to apply the preview's network isolation")
 
         result = _run_deployment(
             self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha,

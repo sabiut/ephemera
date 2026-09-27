@@ -201,8 +201,9 @@ rules:
 - apiGroups: ["apps"]
   resources: ["deployments", "replicasets"]
   verbs: ["get", "list", "create", "update", "patch", "delete"]
+# networkpolicies: every preview namespace gets deny-by-default policies.
 - apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses"]
+  resources: ["ingresses", "networkpolicies"]
   verbs: ["get", "list", "create", "update", "patch", "delete"]
 - apiGroups: [""]
   resources: ["resourcequotas"]

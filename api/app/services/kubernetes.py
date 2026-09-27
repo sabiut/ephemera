@@ -8,7 +8,7 @@ This service handles:
 
 import logging
 import time
-from typing import Callable, Dict, List, Optional, Tuple, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -46,6 +46,21 @@ class KubernetesService:
         self.apps_v1 = client.AppsV1Api()
         self.networking_v1 = client.NetworkingV1Api()
 
+    # Pod Security Admission: the API server itself refuses privileged pods,
+    # host networking/PID/IPC, hostPath volumes and added capabilities in a
+    # preview namespace, whichever path generated the manifests. "baseline"
+    # still allows images that run as root, which most compose apps do.
+    POD_SECURITY_LABELS = {
+        "pod-security.kubernetes.io/enforce": "baseline",
+        "pod-security.kubernetes.io/enforce-version": "latest",
+    }
+
+    # Egress a preview may not reach: the VPC (nodes, Cloud SQL, Memorystore,
+    # other pods and services), carrier-grade NAT space and link-local
+    # addresses (the metadata server). Everything else is the internet.
+    BLOCKED_EGRESS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
+    INGRESS_CONTROLLER_NAMESPACE = "ingress-nginx"
+
     def create_namespace(
         self,
         namespace: str,
@@ -56,9 +71,10 @@ class KubernetesService:
             logger.warning(f"Kubernetes is disabled, skipping namespace creation: {namespace}")
             return False
 
+        all_labels = {**(labels or {}), **self.POD_SECURITY_LABELS}
         try:
             namespace_obj = client.V1Namespace(
-                metadata=client.V1ObjectMeta(name=namespace, labels=labels or {})
+                metadata=client.V1ObjectMeta(name=namespace, labels=all_labels)
             )
             self.core_v1.create_namespace(body=namespace_obj)
             logger.info(f"Created namespace: {namespace}")
@@ -67,12 +83,70 @@ class KubernetesService:
         except ApiException as e:
             if e.status == 409:
                 logger.warning(f"Namespace {namespace} already exists")
-                return True
+                return self.secure_namespace(namespace)
             logger.error(f"Failed to create namespace {namespace}: {e}")
             return False
         except Exception as e:
             logger.error(f"Unexpected error creating namespace {namespace}: {e}")
             return False
+
+    def secure_namespace(self, namespace: str) -> bool:
+        """
+        Put a preview namespace behind the isolation baseline: the Pod Security
+        labels, and network policies that deny everything except what a
+        preview needs. Idempotent; applied on every deploy so previews created
+        before the baseline existed get it too. Returns False if any part
+        could not be applied, and the deploy then fails rather than run
+        unisolated.
+        """
+        if not self.enabled:
+            return False
+        try:
+            self.core_v1.patch_namespace(name=namespace, body={"metadata": {"labels": self.POD_SECURITY_LABELS}})
+            for policy in self.network_policies(namespace):
+                name = policy["metadata"]["name"]
+                try:
+                    self.networking_v1.create_namespaced_network_policy(namespace=namespace, body=policy)
+                except ApiException as e:
+                    if e.status != 409:
+                        raise
+                    self.networking_v1.replace_namespaced_network_policy(name=name, namespace=namespace, body=policy)
+            return True
+        except Exception as e:
+            logger.error(f"Could not apply the isolation baseline to {namespace}: {e}")
+            return False
+
+    @classmethod
+    def network_policies(cls, namespace: str) -> List[Dict[str, Any]]:
+        """
+        The preview's network policies. Deny by default, then allow:
+        - in: from the preview's own pods, and from the ingress controller
+          (which also carries cert-manager's HTTP-01 challenges);
+        - out: to the preview's own pods, DNS, and the public internet but
+          not private ranges, so a preview cannot reach the platform, the
+          database, Redis, the nodes or another customer's preview.
+        Kubelet health probes come from the node and are not affected.
+        """
+        meta = lambda name: {"name": name, "namespace": namespace, "labels": {"managed-by": "ephemera"}}
+        same_namespace = {"podSelector": {}}
+        return [
+            {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta("ephemera-default-deny"),
+             "spec": {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]}},
+            {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta("ephemera-allow-ingress"),
+             "spec": {"podSelector": {}, "policyTypes": ["Ingress"], "ingress": [
+                 {"from": [same_namespace]},
+                 {"from": [{"namespaceSelector": {"matchLabels": {
+                     "kubernetes.io/metadata.name": cls.INGRESS_CONTROLLER_NAMESPACE}}}]},
+             ]}},
+            {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta("ephemera-allow-egress"),
+             "spec": {"podSelector": {}, "policyTypes": ["Egress"], "egress": [
+                 {"to": [same_namespace]},
+                 # DNS may be answered by kube-dns or the node-local cache
+                 # (a link-local address), so port 53 is open to any target.
+                 {"ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]},
+                 {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": list(cls.BLOCKED_EGRESS)}}]},
+             ]}},
+        ]
 
     MANAGED_PREFIX = "pr-"
     MANAGED_LABELS = ({"managed-by": "ephemera"}, {"app": "ephemera"})
