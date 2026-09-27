@@ -31,6 +31,18 @@ from app.models import APIToken, User  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def isolation_applies(monkeypatch):
+    """
+    Deploys apply the isolation baseline to the namespace first; tests that
+    run a task against a fake cluster assume it succeeds. The baseline itself
+    is tested in test_preview_isolation.py.
+    """
+    import app.tasks.environment as env_tasks
+
+    monkeypatch.setattr(env_tasks.kubernetes_service, "secure_namespace", lambda ns: True)
+
+
+@pytest.fixture(autouse=True)
 def no_retry_delays(monkeypatch):
     """GitHub notifications retry with real sleeps; tests don't wait."""
     import app.services.github as github_module

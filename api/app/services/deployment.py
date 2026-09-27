@@ -68,6 +68,43 @@ def parse_port(port: Any) -> Optional[Tuple[int, int]]:
     return None
 
 
+def harden_deployment(manifest: Dict[str, Any]) -> Optional[str]:
+    """
+    Apply the same pod hardening to every Deployment, whichever path wrote
+    it: previously only AI-generated manifests got it. Mutates the manifest:
+    no service-account token is mounted (preview pods never need the
+    Kubernetes API) and no container may gain privileges. Returns why the
+    Deployment must not be applied at all (host access, privileged
+    containers, added capabilities), or None. The namespace's Pod Security
+    label enforces the same at the API server.
+    """
+    pod = (((manifest.get("spec") or {}).get("template") or {}).get("spec"))
+    if not isinstance(pod, dict):
+        return None
+    for key in ("hostNetwork", "hostPID", "hostIPC"):
+        if pod.get(key):
+            return f"{key} is not allowed in previews"
+    for vol in pod.get("volumes") or []:
+        if isinstance(vol, dict) and vol.get("hostPath"):
+            return "hostPath volumes are not allowed in previews"
+    pod["automountServiceAccountToken"] = False
+    for container in (pod.get("containers") or []) + (pod.get("initContainers") or []):
+        if not isinstance(container, dict):
+            continue
+        sc = container.get("securityContext")
+        if not isinstance(sc, dict):
+            sc = container["securityContext"] = {}
+        if sc.get("privileged"):
+            return f"container {container.get('name')} asks to be privileged"
+        if ((sc.get("capabilities") or {}).get("add")):
+            return f"container {container.get('name')} adds Linux capabilities"
+        for port in container.get("ports") or []:
+            if isinstance(port, dict) and port.get("hostPort"):
+                return f"container {container.get('name')} binds a host port"
+        sc["allowPrivilegeEscalation"] = False
+    return None
+
+
 def service_hostname(namespace: str, service_name: str, base_domain: str) -> str:
     """
     Public hostname for a service: {namespace}-{service}.{base_domain}.
@@ -407,6 +444,12 @@ class DeploymentService:
         # deploy finds the ones it no longer wants (see prune_obsolete).
         if kind in PRUNABLE_KINDS:
             metadata.setdefault("labels", {}).setdefault(MANAGED_LABEL, MANAGED_VALUE)
+
+        if kind == "Deployment":
+            refused = harden_deployment(manifest)
+            if refused:
+                logger.error(f"Refused Deployment/{name}: {refused}")
+                return False
 
         if kind == "Deployment" and revision:
             template_meta = manifest.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {})
