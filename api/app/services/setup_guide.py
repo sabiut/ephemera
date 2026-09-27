@@ -12,6 +12,7 @@ with the pull request's head commit: on pull_request events ``github.sha``
 is a temporary merge commit that never matches ``${EPHEMERA_SHA}``.
 """
 
+import json
 import posixpath
 import re
 from dataclasses import asdict, dataclass, field
@@ -35,6 +36,39 @@ class ServicePlan:
     dockerfile: Optional[str]
     image: str                   # ghcr.io/owner/repo[-service], without a tag
     current_image: Optional[str]  # what the compose file has today, if anything
+    build: Dict[str, Any] = field(default_factory=dict)  # the service's build: as written, for the compose snippet
+    action_inputs: Dict[str, str] = field(default_factory=dict)  # extra docker/build-push-action inputs
+    notes: List[str] = field(default_factory=list)  # build settings that could not be carried over
+
+
+# Compose build keys and the docker/build-push-action input each maps to.
+# Values are carried over as written; list-valued inputs are newline-joined.
+_ACTION_INPUT = {
+    "target": "target",
+    "args": "build-args",
+    "platforms": "platforms",
+    "labels": "labels",
+    "cache_from": "cache-from",
+    "cache_to": "cache-to",
+    "no_cache": "no-cache",
+    "pull": "pull",
+    "shm_size": "shm-size",
+    "network": "network",
+    "extra_hosts": "add-hosts",
+    "additional_contexts": "build-contexts",
+}
+# Compose build keys with no safe automatic equivalent, and what to do instead.
+_UNSUPPORTED = {
+    "secrets": "build secrets need their values in CI; add them to the step's secrets: input from repository secrets",
+    "ssh": "SSH forwarding needs a key in CI; set up an SSH agent step and the action's ssh: input",
+    "dockerfile_inline": "move the inline Dockerfile into a file and point dockerfile: at it",
+    "privileged": "privileged builds are not available on GitHub-hosted runners",
+    "isolation": "Windows isolation modes are not available on the Linux runner",
+    "tags": "extra tags are not needed; previews use the image tagged with the commit",
+    "ulimits": "not supported by the build action",
+}
+_HANDLED = {"context", "dockerfile"} | set(_ACTION_INPUT) | set(_UNSUPPORTED)
+_VAR = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 
 
 @dataclass
@@ -66,6 +100,49 @@ def _build(cfg: Dict[str, Any]) -> "tuple[str, Optional[str]]":
     return str(build or "."), None
 
 
+_COMMIT_VAR = re.compile(r"\$\{?EPHEMERA_SHA(_SHORT)?\}?(?![A-Za-z0-9_])")
+
+
+def _for_ci(value: str) -> str:
+    """A compose value as the workflow should see it: the commit becomes the workflow's SHA."""
+    return _COMMIT_VAR.sub(lambda m: "${{ env.SHA_SHORT }}" if m.group(1) else "${{ env.SHA }}", value)
+
+
+def _lines(value: Any, separator: str = "=") -> List[str]:
+    """A compose mapping or list as KEY=VALUE lines (args, labels, extra_hosts, ...)."""
+    if isinstance(value, dict):
+        return [f"{k}{separator}{v}" if v is not None else str(k) for k, v in value.items()]
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    return [str(value)]
+
+
+def _plan_build(name: str, build: Any) -> "tuple[Dict[str, Any], Dict[str, str], List[str]]":
+    """(build as written, extra action inputs, notes) for one service."""
+    if not isinstance(build, dict):
+        return {}, {}, []
+    inputs: Dict[str, str] = {}
+    notes: List[str] = []
+    for key, value in build.items():
+        if key in _ACTION_INPUT:
+            items = _lines(value, ":" if key == "extra_hosts" else "=") if isinstance(value, (dict, list)) else [str(value).lower() if isinstance(value, bool) else str(value)]
+            if key == "args":
+                for item in items:
+                    if "=" not in item:
+                        notes.append(f"`{name}`: build arg `{item}` takes its value from the environment in docker "
+                                     "compose; give it a value in the workflow's build-args.")
+                    for var in _VAR.findall(item.split("=", 1)[-1]):
+                        if not var.startswith("EPHEMERA_"):
+                            notes.append(f"`{name}`: build arg `{item.split('=', 1)[0]}` uses `${{{var}}}`, which "
+                                         "CI does not set; replace it with a value or a repository secret.")
+            inputs[_ACTION_INPUT[key]] = "\n".join(_for_ci(i) for i in items)
+        elif key in _UNSUPPORTED:
+            notes.append(f"`{name}`: build `{key}` was not carried over: {_UNSUPPORTED[key]}.")
+        elif key not in _HANDLED:
+            notes.append(f"`{name}`: build `{key}` was not carried over; add it to the workflow by hand if the build needs it.")
+    return dict(build), inputs, notes
+
+
 def build_guide(repo: InstalledRepository, compose_text: Optional[str]) -> SetupGuide:
     owner, name = repo.full_name.split("/", 1)
     guide = SetupGuide(repository=repo.full_name, status="needs_setup")
@@ -93,11 +170,24 @@ def build_guide(repo: InstalledRepository, compose_text: Optional[str]) -> Setup
                          "Make sure CI pushes those images for each commit.")
         return guide
 
+    # Build settings come from the file as written, not the interpolated
+    # copy above, so ${EPHEMERA_SHA} in a build arg becomes the workflow's
+    # commit rather than a placeholder.
+    try:
+        raw = yaml.safe_load(compose_text) or {}
+        raw_services = raw.get("services") if isinstance(raw, dict) else None
+    except yaml.YAMLError:
+        raw_services = None
+    raw_services = raw_services if isinstance(raw_services, dict) else services
+
     base = f"ghcr.io/{_slug(owner)}/{_slug(name)}"
     for svc in todo:
-        context, dockerfile = _build(services[svc] if isinstance(services[svc], dict) else {})
+        cfg = raw_services.get(svc) if isinstance(raw_services.get(svc), dict) else {}
+        context, dockerfile = _build(cfg)
         image = base if len(todo) == 1 else f"{base}-{_slug(svc)}"
-        guide.services.append(ServicePlan(svc, context, dockerfile, image, report.images.get(svc)))
+        build, inputs, notes = _plan_build(svc, cfg.get("build"))
+        guide.services.append(ServicePlan(svc, context, dockerfile, image, report.images.get(svc), build, inputs, notes))
+        guide.notes.extend(notes)
 
     guide.workflow = _workflow(repo.default_branch, guide.services)
     guide.compose_snippet = _compose_snippet(guide.services)
@@ -135,11 +225,24 @@ def _workflow(default_branch: str, plans: List[ServicePlan]) -> str:
             # compose resolves dockerfile against the context; the action
             # resolves file against the repository root.
             lines.append(f"          file: {posixpath.normpath(posixpath.join(p.context, p.dockerfile))}")
+        for key, value in p.action_inputs.items():
+            if "\n" in value:
+                lines.append(f"          {key}: |")
+                lines.extend(f"            {line}" for line in value.split("\n"))
+            else:
+                lines.append(f"          {key}: {_scalar(value)}")
         lines += [
             "          push: true",
             f"          tags: {p.image}:${{{{ env.SHA }}}}",
         ]
         steps.append("\n".join(lines))
+    # Building for several platforms needs QEMU and buildx on the runner.
+    multi_arch = any("," in p.action_inputs.get("platforms", "") or "\n" in p.action_inputs.get("platforms", "")
+                     for p in plans)
+    setup = ("      - uses: docker/setup-qemu-action@v3\n\n      - uses: docker/setup-buildx-action@v3\n\n"
+             if multi_arch else "")
+    if any("env.SHA_SHORT" in v for p in plans for v in p.action_inputs.values()):
+        setup = ('      - run: echo "SHA_SHORT=${SHA::7}" >> "$GITHUB_ENV"\n\n') + setup
     return f"""name: Ephemera preview images
 
 # Builds an image for every pull request commit, tagged with that commit,
@@ -174,15 +277,26 @@ jobs:
           username: ${{{{ github.actor }}}}
           password: ${{{{ secrets.GITHUB_TOKEN }}}}
 
-{chr(10).join(chr(10).join([s, '']) for s in steps).rstrip()}
+{setup}{chr(10).join(chr(10).join([s, '']) for s in steps).rstrip()}
 """
+
+
+def _scalar(value: str) -> str:
+    """A single-line YAML value, quoted when YAML would otherwise misread it."""
+    plain = re.fullmatch(r"[A-Za-z0-9_./:@=+-][A-Za-z0-9_./:@=+ ,-]*", value) and value.lower() not in ("true", "false", "yes", "no", "null", "on", "off")
+    return value if plain and not value.startswith("${{") else json.dumps(value)
 
 
 def _compose_snippet(plans: List[ServicePlan]) -> str:
     lines = ["services:"]
     for p in plans:
         lines.append(f"  {p.name}:")
-        lines.append(f"    build: {p.context}" if not p.dockerfile else f"    build:\n      context: {p.context}\n      dockerfile: {p.dockerfile}")
+        if p.build:
+            # The service's build settings exactly as written: only image: changes.
+            dumped = yaml.safe_dump({"build": p.build}, default_flow_style=False, sort_keys=False).rstrip("\n")
+            lines.extend("    " + line for line in dumped.split("\n"))
+        else:
+            lines.append(f"    build: {p.context}")
         lines.append(f"    image: {p.image}:${{EPHEMERA_SHA}}"
                      + (f"   # was {p.current_image}" if p.current_image else ""))
         lines.append("    # keep this service's other settings (ports, environment, ...) as they are")

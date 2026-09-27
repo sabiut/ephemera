@@ -104,3 +104,75 @@ def test_setup_guide_endpoint(client, auth_headers, monkeypatch):
     assert "docker/build-push-action" in body["workflow"]
     assert client.get("/api/v1/repositories/other/secret/setup-guide", headers=auth_headers).status_code == 404
     repo_access.clear_cache()
+
+
+# ------------------------------------------------------------------ build options
+
+RICH = """
+services:
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.prod
+      target: production
+      args:
+        NODE_ENV: production
+        GIT_SHA: ${EPHEMERA_SHA}
+        SHORT: $EPHEMERA_SHA_SHORT
+        API_URL: ${API_URL}
+        FROM_ENV:
+      platforms: [linux/amd64, linux/arm64]
+      cache_from: [type=gha]
+      extra_hosts:
+        internal.example: 10.0.0.5
+      secrets: [npm_token]
+    ports: ["3000:3000"]
+"""
+
+
+def _web(g):
+    return next(s for s in _steps(g.workflow) if s.get("name") == "Build and push web")["with"]
+
+
+def test_target_and_build_args_are_carried_into_the_workflow():
+    # The review's reproduction: build.target and build.args disappeared.
+    w = _web(build_guide(REPO, RICH))
+    assert w["target"] == "production"
+    args = w["build-args"].splitlines()
+    assert "NODE_ENV=production" in args
+    assert "GIT_SHA=${{ env.SHA }}" in args        # the commit, not a placeholder
+    assert "SHORT=${{ env.SHA_SHORT }}" in args    # unbraced form, not mangled by the SHA rule
+    assert w["file"] == "web/Dockerfile.prod" and w["context"] == "./web"
+
+
+def test_other_supported_options_map_to_action_inputs():
+    g = build_guide(REPO, RICH)
+    w = _web(g)
+    assert w["platforms"].splitlines() == ["linux/amd64", "linux/arm64"]
+    assert w["cache-from"] == "type=gha"
+    assert w["add-hosts"] == "internal.example:10.0.0.5"  # compose's host: ip mapping
+    uses = [s.get("uses", "") for s in _steps(g.workflow)]
+    assert any(u.startswith("docker/setup-qemu-action") for u in uses)   # several platforms need emulation
+    assert any(u.startswith("docker/setup-buildx-action") for u in uses)
+    assert any('SHA_SHORT=${SHA::7}' in s.get("run", "") for s in _steps(g.workflow))
+
+
+def test_what_cannot_be_carried_over_is_named_not_dropped():
+    notes = " ".join(build_guide(REPO, RICH).notes)
+    assert "build `secrets` was not carried over" in notes
+    assert "`API_URL` uses `${API_URL}`" in notes and "CI does not set" in notes
+    assert "`FROM_ENV` takes its value from the environment" in notes
+
+
+def test_the_compose_snippet_keeps_the_build_settings_as_written():
+    snippet = yaml.safe_load(build_guide(REPO, RICH).compose_snippet)["services"]["web"]
+    assert snippet["build"]["target"] == "production"
+    assert snippet["build"]["args"]["GIT_SHA"] == "${EPHEMERA_SHA}"  # compose keeps its own variable
+    assert snippet["image"] == "ghcr.io/acme/shop_app:${EPHEMERA_SHA}"
+
+
+def test_a_plain_build_needs_no_extra_steps():
+    g = build_guide(REPO, "services:\n  web:\n    build: .\n")
+    uses = [s.get("uses", "") for s in _steps(g.workflow)]
+    assert not any("qemu" in u or "buildx" in u for u in uses)
+    assert not any("SHA_SHORT" in s.get("run", "") for s in _steps(g.workflow))
