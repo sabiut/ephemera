@@ -60,6 +60,11 @@ celery_app.conf.update(
             "schedule": 900.0,  # every 15 minutes
             "kwargs": {"max_age_hours": 1},
         },
+        # Remove previews of open PRs with no push for PREVIEW_IDLE_DAYS.
+        "expire-idle-previews": {
+            "task": "app.tasks.cleanup.expire_idle_previews",
+            "schedule": 3600.0,  # hourly
+        },
         # Drop records of previews destroyed more than a week ago.
         "delete-old-destroyed-environments": {
             "task": "app.tasks.cleanup.cleanup_old_environments",

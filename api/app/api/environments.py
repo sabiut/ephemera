@@ -13,7 +13,7 @@ from app.crud import deployment as deployment_crud
 from app.schemas.environment import DeploymentResponse, EnvironmentCreate, EnvironmentResponse
 from app.services import repo_access
 from app.services.github import GitHubUnavailable, github_service
-from app.services.provisioning import EnvironmentRequest, request_environment
+from app.services.provisioning import EnvironmentRequest, PreviewLimitReached, request_environment
 
 logger = logging.getLogger(__name__)
 
@@ -161,21 +161,24 @@ async def create_environment(
         avatar_url=pr.author_avatar_url,
     )
 
-    environment, action = request_environment(
-        db,
-        EnvironmentRequest(
-            repository_full_name=repo,
-            repository_name=env_data.repository_name or repo.rpartition("/")[2],
-            pr_number=pr.number,
-            pr_title=env_data.pr_title or pr.title,
-            branch_name=env_data.branch_name or pr.head_ref,
-            commit_sha=env_data.commit_sha or pr.head_sha,
-            installation_id=installation_id,
-            owner=owner,
-        ),
-    )
-    logger.info(f"Environment {environment.namespace}: {action}")
-    return environment
+    try:
+        environment, action = request_environment(
+            db,
+            EnvironmentRequest(
+                repository_full_name=repo,
+                repository_name=env_data.repository_name or repo.rpartition("/")[2],
+                pr_number=pr.number,
+                pr_title=env_data.pr_title or pr.title,
+                branch_name=env_data.branch_name or pr.head_ref,
+                commit_sha=env_data.commit_sha or pr.head_sha,
+                installation_id=installation_id,
+                owner=owner,
+            ),
+        )
+        logger.info(f"Environment {environment.namespace}: {action}")
+        return environment
+    except PreviewLimitReached as limit:
+        raise HTTPException(status_code=429, detail=str(limit))
 
 
 def _may_provision(installation_id: int, repo: str, caller: User, pr_author_id: int) -> bool:

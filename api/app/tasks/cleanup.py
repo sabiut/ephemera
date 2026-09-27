@@ -18,6 +18,7 @@ from sqlalchemy import and_
 from app.core.celery_app import celery_app
 from app.database import SessionLocal
 from app.services.kubernetes import kubernetes_service
+from app.config import settings
 from app.crud import environment as environment_crud
 from app.models.environment import Environment, EnvironmentStatus
 
@@ -279,3 +280,34 @@ def retry_failed_environments(self, max_age_hours: int = 1):
     except Exception as e:
         logger.error(f"Error during failed environment retry: {e}")
         return {"success": False, "error": str(e), "retry_count": len(retried)}
+
+
+@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.cleanup.expire_idle_previews")
+def expire_idle_previews(self):
+    """
+    Remove previews of open PRs that have had no push for PREVIEW_IDLE_DAYS.
+
+    Closing a PR was the only thing that freed a preview, and PRs can stay
+    open for months. Expired previews come back on the next push, or with
+    Recreate preview in the dashboard. The teardown re-checks idleness under
+    the environment lock, so a push that lands in between wins.
+    """
+    from app.tasks.environment import destroy_environment, is_idle  # avoid a circular import
+
+    if settings.preview_idle_days <= 0:
+        return {"success": True, "expired": [], "disabled": True}
+    expired: list = []
+    try:
+        candidates = self.db.query(Environment).filter(
+            and_(Environment.status.in_([EnvironmentStatus.READY, EnvironmentStatus.FAILED]),
+                 Environment.closed_at.is_(None))
+        ).all()
+        for env in candidates:
+            if is_idle(env):
+                destroy_environment.delay(environment_id=env.id, expired=True)
+                expired.append(env.id)
+                logger.info(f"Environment {env.id} ({env.namespace}) idle for {settings.preview_idle_days} days; expiring")
+        return {"success": True, "expired": expired}
+    except Exception as e:
+        logger.error(f"Error while expiring idle previews: {e}")
+        return {"success": False, "error": str(e), "expired": expired}

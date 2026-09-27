@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     environment_lock_retry_seconds: int = 60
     environment_lock_max_retries: int = 60
 
+    # Resource limits. A repository may hold this many previews at once
+    # (0: unlimited); a preview with no push for this many days is removed
+    # and comes back on the next push (0: never).
+    preview_max_active_per_repository: int = 5
+    preview_idle_days: int = 7
+
     # Preview namespace quotas
     preview_cpu_quota: str = "1"
     preview_memory_quota: str = "2Gi"
