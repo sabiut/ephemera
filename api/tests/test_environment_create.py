@@ -209,3 +209,32 @@ def test_closing_marker_survives_a_rejected_api_request(client, auth_headers, gi
     assert client.post("/api/v1/environments/", json=BODY, headers=auth_headers).status_code == 409
     db_session.refresh(env)
     assert env.closed_at is not None
+
+
+def test_a_reset_preview_keeps_its_stored_namespace_and_url(db_session, user):
+    # Environments created before the hash was added keep their namespace;
+    # a reopen must not point the placeholder URL at a new one.
+    from app.crud import environment as environment_crud
+    from app.models import EnvironmentStatus
+    from app.services.provisioning import EnvironmentRequest, request_environment
+    import app.services.provisioning as provisioning
+    env = environment_crud.create_environment(
+        db=db_session, repository_full_name=REPO, repository_name="app", pr_number=7, pr_title="t",
+        branch_name="b", commit_sha="f" * 40, installation_id=REAL_INSTALLATION, owner=user)
+    env.namespace = "pr-7-app"  # the old scheme
+    env.status = EnvironmentStatus.DESTROYED
+    db_session.commit()
+    provisioning_calls = []
+    import app.tasks.environment as env_tasks
+    orig = env_tasks.provision_environment.delay
+    env_tasks.provision_environment.delay = lambda **kw: provisioning_calls.append(kw)
+    try:
+        request_environment(db_session, EnvironmentRequest(
+            repository_full_name=REPO, repository_name="app", pr_number=7, pr_title="t", branch_name="b",
+            commit_sha="f" * 40, installation_id=REAL_INSTALLATION, owner=user))
+    finally:
+        env_tasks.provision_environment.delay = orig
+    db_session.refresh(env)
+    assert env.namespace == "pr-7-app"
+    assert env.environment_url.startswith("https://pr-7-app.")
+    assert provisioning_calls

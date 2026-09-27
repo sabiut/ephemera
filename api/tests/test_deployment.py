@@ -13,8 +13,32 @@ def _service():
 
 
 def test_build_namespace_is_a_dns_label():
-    assert build_namespace("My_App.Service", 12) == "pr-12-my-app-service"
-    assert len(build_namespace("a" * 80, 1)) <= 63
+    ns = build_namespace("acme/My_App.Service", 12)
+    assert ns.startswith("pr-12-my-app-service-") and len(ns) == len("pr-12-my-app-service-") + 6
+    assert len(build_namespace("acme/" + "a" * 80, 123456)) <= 37  # leaves room for service names
+
+
+def test_same_repository_name_under_different_owners_gets_different_namespaces():
+    # alice/web and bob/web PR #1 both became pr-1-web; the second preview
+    # failed on the unique namespace and would have taken the first's URLs.
+    assert build_namespace("alice/web", 1) != build_namespace("bob/web", 1)
+    assert build_namespace("Alice/Web", 1) == build_namespace("alice/web", 1)  # GitHub names are case-insensitive
+
+
+def test_hostnames_always_fit_a_dns_label():
+    from app.services.ai_validators import ManifestValidator
+    from app.services.deployment import service_hostname
+    ns = build_namespace("acme/" + "a" * 80, 123456)
+    long_a = service_hostname(ns, "a-very-long-service-name-for-background-jobs", "preview.test")
+    long_b = service_hostname(ns, "a-very-long-service-name-for-background-mail", "preview.test")
+    for host in (long_a, long_b):
+        assert len(host.split(".")[0]) <= 63 and host.startswith(f"{ns}-")
+    assert long_a != long_b  # shortened names stay distinct
+    assert service_hostname("pr-1-web-abc123", "web", "preview.test") == "pr-1-web-abc123-web.preview.test"
+    v = ManifestValidator(base_domain="preview.test")
+    v._expected_namespace = ns
+    assert v.is_allowed_host(long_a)
+    assert not v.is_allowed_host(f"{ns}-{'x' * 40}.preview.test")  # an AI-written label over 63 characters
 
 
 def test_parse_port_variants():

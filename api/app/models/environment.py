@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
 import enum
+import hashlib
 import re
 
 
@@ -93,16 +94,25 @@ class Environment(Base):
 
     def generate_namespace(self) -> str:
         """Generate Kubernetes namespace name"""
-        return build_namespace(self.repository_name, self.pr_number)
+        return build_namespace(self.repository_full_name, self.pr_number)
 
 
-def build_namespace(repository_name: str, pr_number: int) -> str:
+def build_namespace(repository_full_name: str, pr_number: int) -> str:
     """
-    Build the Kubernetes namespace for a PR: pr-{number}-{repo-slug}.
+    Build the Kubernetes namespace for a PR: pr-{number}-{repo-slug}-{hash}.
+
+    The hash is of the full owner/name, so alice/web and bob/web (both PR #1)
+    no longer share pr-1-web: the second preview failed on the unique
+    namespace and would have claimed the first one's hostnames. The slug
+    keeps the namespace readable.
 
     Namespaces must be DNS labels (max 63 chars, lowercase alphanumeric or '-').
-    The same slug is used as the prefix of every preview hostname, so it is
-    also what the manifest validator checks Ingress hosts against.
+    The namespace is also the prefix of every preview hostname, so it is kept
+    short (at most 37 characters for a six-digit PR number) and is what the
+    manifest validator checks Ingress hosts against. Existing environments
+    keep the namespace stored when they were created.
     """
-    slug = re.sub(r"[^a-z0-9-]+", "-", repository_name.lower()).strip("-")[:20].rstrip("-")
-    return f"pr-{pr_number}-{slug or 'repo'}"
+    name = repository_full_name.rsplit("/", 1)[-1]
+    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:20].rstrip("-")
+    digest = hashlib.sha256(repository_full_name.lower().encode()).hexdigest()[:6]
+    return f"pr-{pr_number}-{slug or 'repo'}-{digest}"
