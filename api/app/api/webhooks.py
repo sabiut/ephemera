@@ -14,7 +14,7 @@ from app.models.environment import EnvironmentStatus
 from app.schemas.github import PullRequestWebhook
 from app.services import repo_access
 from app.services.github import github_service
-from app.services.provisioning import EnvironmentRequest, request_environment
+from app.services.provisioning import EnvironmentRequest, PreviewLimitReached, request_environment
 from app.tasks.environment import destroy_environment, update_environment
 
 logger = logging.getLogger(__name__)
@@ -46,19 +46,34 @@ def handle_pull_request_opened(payload: PullRequestWebhook):
             avatar_url=pr.user.avatar_url,
         )
 
-        environment, action = request_environment(
-            db,
-            EnvironmentRequest(
-                repository_full_name=repo.full_name,
-                repository_name=repo.name,
-                pr_number=pr.number,
-                pr_title=pr.title,
-                branch_name=pr.head["ref"],
-                commit_sha=pr.head["sha"],
-                installation_id=installation_id,
-                owner=owner,
-            ),
-        )
+        try:
+            environment, action = request_environment(
+                db,
+                EnvironmentRequest(
+                    repository_full_name=repo.full_name,
+                    repository_name=repo.name,
+                    pr_number=pr.number,
+                    pr_title=pr.title,
+                    branch_name=pr.head["ref"],
+                    commit_sha=pr.head["sha"],
+                    installation_id=installation_id,
+                    owner=owner,
+                ),
+            )
+        except PreviewLimitReached as limit:
+            logger.info(f"{repo.full_name}#{pr.number}: {limit}")
+            github_service.post_comment_to_pr(installation_id, repo.full_name, pr.number, f"""## Preview Not Created
+
+{limit}
+
+---
+*Powered by Ephemera*
+""")
+            github_service.update_pr_status(
+                installation_id=installation_id, repo_full_name=repo.full_name, commit_sha=pr.head["sha"],
+                state="error", description=f"Preview limit reached ({limit.limit} per repository)",
+            )
+            return
 
         if action == "exists":
             return
@@ -150,10 +165,15 @@ def handle_pull_request_synchronize(payload: PullRequestWebhook):
 
     with SessionLocal() as db:
         environment = environment_crud.get_environment_by_pr(db, repo.full_name, pr.number)
-        if not environment or environment.status == EnvironmentStatus.FAILED:
-            # No record, or the last attempt failed: the failure comment tells
-            # the developer to push a new commit, so a push must start over
-            # rather than be ignored. The opened handler resets and re-provisions.
+        removed_but_open = (
+            environment is not None and environment.closed_at is None
+            and environment.status in (EnvironmentStatus.DESTROYING, EnvironmentStatus.DESTROYED)
+        )
+        if not environment or environment.status == EnvironmentStatus.FAILED or removed_but_open:
+            # No record, the last attempt failed, or the preview was removed
+            # while the PR stayed open (it expired after days without a
+            # push): a push must bring it back rather than be ignored. The
+            # opened handler resets and re-provisions.
             logger.info(f"PR #{pr.number} has no live environment; provisioning from scratch")
             provision_from_scratch = True
         else:

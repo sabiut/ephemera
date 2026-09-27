@@ -63,6 +63,17 @@ def _memory_label(quantity: str) -> str:
     return quantity
 
 
+def _limits_sentence() -> str:
+    """The repository limit and idle expiry, as configured, in one sentence."""
+    parts = []
+    if settings.preview_max_active_per_repository > 0:
+        parts.append(f"Up to {settings.preview_max_active_per_repository} previews per repository at a time.")
+    if settings.preview_idle_days > 0:
+        d = settings.preview_idle_days
+        parts.append(f"A preview with no new commits for {d} day{'s' if d != 1 else ''} is removed; the next push brings it back.")
+    return " ".join(parts) or "Previews stay up until their pull request closes."
+
+
 def _install_url() -> str:
     try:
         return github_service.app_install_url() or "/auth/github/login"
@@ -83,6 +94,7 @@ def root():  # sync: the install link may ask GitHub, so run it off the event lo
         "{{PREVIEW_MEMORY}}": _memory_label(settings.preview_memory_quota),
         "{{PREVIEW_PODS}}": settings.preview_pod_quota,
         "{{INSTALL_URL}}": _install_url(),
+        "{{PREVIEW_LIMITS}}": _limits_sentence(),
     }.items():
         page = page.replace(key, html.escape(str(value), quote=True))
     return HTMLResponse(page)

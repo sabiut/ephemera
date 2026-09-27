@@ -334,7 +334,11 @@ function timeAgo(dateStr) {
 // error and Retry are in the details view (not a hover tooltip, which
 // phones cannot show).
 function envErrorHTML(env) {
-    if ((env.status || '').toLowerCase() !== 'failed') return '';
+    const s = (env.status || '').toLowerCase();
+    if (s === 'destroyed' && (env.error_message || '').startsWith('Expired')) {
+        return `<div class="text-sm" style="margin-top:4px;"><a class="row-link" style="color:#a5b4fc;" onclick="openEnvironment(${env.id})">Expired: recreate</a></div>`;
+    }
+    if (s !== 'failed') return '';
     const title = (env.diagnosis && env.diagnosis.title) || 'Preview failed';
     return `<div class="text-sm" style="margin-top:4px;"><a class="row-link" onclick="openEnvironment(${env.id})">${escapeHtml(title)}: see what to do</a></div>`;
 }
@@ -482,6 +486,8 @@ function renderEnvironmentDetail() {
     } else if (PENDING_STATUSES.includes(status)) {
         const total = env.deploy_started_at ? ` · ${sinceHTML(env.deploy_started_at)} so far` : '';
         main = `<div class="detail-note">Deploying commit <code>${escapeHtml(sha.slice(0, 7))}</code>${total}. This updates automatically.</div>${stepperHTML(env)}`;
+    } else if (status === 'destroyed' && (env.error_message || '').startsWith('Expired')) {
+        main = `<div class="detail-note">Removed after a period with no new commits, to free resources. Push a commit to the pull request, or recreate it here.</div>`;
     } else if (status === 'destroyed') {
         main = '<div class="detail-note">Removed. The pull request was closed or merged.</div>';
     }
@@ -497,8 +503,10 @@ function renderEnvironmentDetail() {
     }
     body.innerHTML = prTitle + meta + main + history;
 
+    const expired = status === 'destroyed' && (env.error_message || '').startsWith('Expired');
     const retry = status === 'failed'
-        ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Retry preview</button>` : '';
+        ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Retry preview</button>`
+        : expired ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Recreate preview</button>` : '';
     footer.innerHTML = `<button class="btn btn-ghost" onclick="closeEnvironmentDetail()">Close</button>${retry}`;
 }
 

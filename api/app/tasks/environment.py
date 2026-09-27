@@ -8,6 +8,7 @@ These tasks handle async operations for Kubernetes environments including:
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from celery import Task
@@ -422,13 +423,35 @@ Fix the cause and push a new commit; Ephemera will try again from scratch.{FOOTE
         return {"success": False, "environment_id": environment_id, "error": str(e)}
 
 
+EXPIRED_MESSAGE = "Expired: removed after {days} days without a push"
+
+
+def last_activity(environment) -> Optional[datetime]:
+    """When the preview was last requested or deployed (UTC)."""
+    stamps = [t for t in (environment.deploy_started_at, environment.last_deployed_at, environment.created_at) if t]
+    if not stamps:
+        return None
+    aware = [t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in stamps]
+    return max(aware)
+
+
+def is_idle(environment, now: Optional[datetime] = None) -> bool:
+    """No push or deploy for PREVIEW_IDLE_DAYS (never, when that is 0)."""
+    days = settings.preview_idle_days
+    last = last_activity(environment)
+    if days <= 0 or last is None:
+        return False
+    return (now or datetime.now(timezone.utc)) - last > timedelta(days=days)
+
+
 def _destroy_body(
     self,
     environment_id: int,
     installation_id: Optional[int] = None,
     repo_full_name: Optional[str] = None,
     pr_number: Optional[int] = None,
-    pr_merged: bool = False
+    pr_merged: bool = False,
+    expired: bool = False,
 ):
     """Destroy an environment by deleting its Kubernetes namespace."""
     logger.info(f"Starting environment destruction for environment {environment_id}")
@@ -458,10 +481,23 @@ def _destroy_body(
             logger.warning(f"{environment.namespace} still terminating; leaving environment {environment_id} DESTROYING")
             return {"success": False, "environment_id": environment_id, "error": "namespace still terminating"}
 
-        environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.DESTROYED)
+        environment_crud.update_environment_status(
+            self.db, environment, EnvironmentStatus.DESTROYED,
+            error_message=EXPIRED_MESSAGE.format(days=settings.preview_idle_days) if expired else None)
         logger.info(f"Environment {environment_id} destroyed; namespace {environment.namespace} is gone")
 
-        if installation_id and repo_full_name and pr_number:
+        installation_id = installation_id or environment.installation_id
+        repo_full_name = repo_full_name or environment.repository_full_name
+        pr_number = pr_number or environment.pr_number
+        if expired and installation_id and repo_full_name and pr_number:
+            days = settings.preview_idle_days
+            comment = f"""## Preview Removed
+
+This preview had no new commits for {days} day{'s' if days != 1 else ''}, so it was removed to free resources.
+
+Push a commit to bring it back, or use **Recreate preview** in the Ephemera dashboard.{FOOTER}"""
+            github_service.post_comment_to_pr(installation_id, repo_full_name, pr_number, comment)
+        elif installation_id and repo_full_name and pr_number:
             action = "merged" if pr_merged else "closed"
             comment = f"""## Environment Cleanup Complete
 
@@ -601,21 +637,31 @@ def update_environment(self, environment_id: int, commit_sha: str, installation_
 @celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.environment.destroy_environment")
 def destroy_environment(self, environment_id: int, installation_id: Optional[int] = None,
                         repo_full_name: Optional[str] = None, pr_number: Optional[int] = None,
-                        pr_merged: bool = False):
-    """Delete the preview's namespace. Never superseded by a commit: closing always wins."""
+                        pr_merged: bool = False, expired: bool = False):
+    """
+    Delete the preview's namespace. Never superseded by a commit: closing
+    always wins. ``expired`` removes an idle preview of a PR that is still
+    open (see cleanup.expire_idle_previews); it stands down if the preview
+    has had a push since it was queued.
+    """
     return _locked(self, environment_id, None, None, lambda: _destroy_body(
-        self, environment_id, installation_id, repo_full_name, pr_number, pr_merged), teardown=True)
+        self, environment_id, installation_id, repo_full_name, pr_number, pr_merged, expired=expired),
+        teardown=True, expiry=expired)
 
 
 def _locked(task, environment_id: int, commit_sha: Optional[str], deployment_id: Optional[int], run,
-            teardown: bool = False, notify=(None, None, None)):
+            teardown: bool = False, notify=(None, None, None), expiry: bool = False):
     with environment_lock(environment_id) as state:
         if state != HELD:
             return _reschedule(task, environment_id, commit_sha, deployment_id, state, teardown, notify)
         environment = environment_crud.get_environment(task.db, environment_id)
         if environment is not None:
             task.db.refresh(environment)
-            if teardown and environment.closed_at is None:
+            if teardown and expiry:
+                if environment.closed_at is None and not is_idle(environment):
+                    logger.info(f"Environment {environment_id} was used since it was queued to expire; keeping it")
+                    return {"success": False, "environment_id": environment_id, "skipped": "no longer idle"}
+            elif teardown and environment.closed_at is None:
                 logger.info(f"Environment {environment_id}'s PR was reopened; skipping teardown")
                 return {"success": False, "environment_id": environment_id, "skipped": "pull request reopened"}
             if not teardown and environment.closed_at is not None:
