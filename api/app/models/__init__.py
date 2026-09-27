@@ -3,6 +3,7 @@ from app.models.environment import Environment, EnvironmentStatus
 from app.models.deployment import Deployment, DeploymentStatus
 from app.models.credential import CloudCredential, CloudProvider
 from app.models.api_token import APIToken
+from app.models.registry_credential import RegistryCredential
 
 __all__ = [
     "User",
@@ -13,4 +14,5 @@ __all__ = [
     "CloudCredential",
     "CloudProvider",
     "APIToken",
+    "RegistryCredential",
 ]

@@ -6,7 +6,9 @@ This service handles:
 - Resource quota management
 """
 
+import base64
 import logging
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -147,6 +149,40 @@ class KubernetesService:
                  {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": list(cls.BLOCKED_EGRESS)}}]},
              ]}},
         ]
+
+    def sync_pull_secret(self, namespace: str, docker_config: Optional[str],
+                         name: str = "ephemera-registry") -> bool:
+        """
+        Make the namespace's image pull Secret match the repository's registry
+        credentials: create or update it, or delete it when there are none
+        left. Returns False if it could not be done.
+        """
+        if not self.enabled:
+            return docker_config is None
+        try:
+            if docker_config is None:
+                try:
+                    self.core_v1.delete_namespaced_secret(name=name, namespace=namespace)
+                except ApiException as e:
+                    if e.status != 404:
+                        raise
+                return True
+            body = {
+                "apiVersion": "v1", "kind": "Secret", "type": "kubernetes.io/dockerconfigjson",
+                "metadata": {"name": name, "namespace": namespace, "labels": {"managed-by": "ephemera"}},
+                "data": {".dockerconfigjson": base64.b64encode(docker_config.encode()).decode()},
+            }
+            try:
+                self.core_v1.create_namespaced_secret(namespace=namespace, body=body)
+            except ApiException as e:
+                if e.status != 409:
+                    raise
+                self.core_v1.patch_namespaced_secret(name=name, namespace=namespace, body=body)
+            return True
+        except Exception as e:
+            # Never log the Secret itself.
+            logger.error(f"Could not update the image pull Secret in {namespace}: {getattr(e, 'status', type(e).__name__)}")
+            return False
 
     MANAGED_PREFIX = "pr-"
     MANAGED_LABELS = ({"managed-by": "ephemera"}, {"app": "ephemera"})
@@ -296,6 +332,8 @@ class KubernetesService:
     # Waiting reasons that will not resolve by waiting longer.
     FATAL_WAITING_REASONS = {"InvalidImageName", "ErrImageNeverPull", "CreateContainerConfigError", "CreateContainerError"}
     IMAGE_PULL_REASONS = {"ErrImagePull", "ImagePullBackOff"}
+    # A pull refused for lack of access rather than a missing image.
+    PULL_DENIED = re.compile(r"unauthorized|denied|forbidden|\b401\b|\b403\b|authentication required", re.I)
     CRASH_LOOP_RESTARTS = 3
     IMAGE_RETRY_SECONDS = 30
 
@@ -384,6 +422,12 @@ class KubernetesService:
                 continue
             image = cs.image or ""
             if waiting.reason in self.IMAGE_PULL_REASONS:
+                message = (waiting.message or "").strip().split("\n")[0]
+                # The registry refused us: waiting for CI won't help (the
+                # image may well exist), so say so at once instead of after
+                # the ten-minute image wait.
+                if self.PULL_DENIED.search(message):
+                    return "fatal", f"{waiting.reason}: {message} (access denied)"
                 if any(m and m in image for m in commit_markers):
                     return "image", image
                 continue  # an ordinary pull failure may be transient; the timeout decides

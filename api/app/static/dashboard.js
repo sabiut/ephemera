@@ -39,10 +39,15 @@ async function apiCall(endpoint, options = {}) {
     }
 
     if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'API request failed');
+        const error = await response.json().catch(() => ({}));
+        // FastAPI validation errors give detail as a list of {msg, loc}.
+        const detail = Array.isArray(error.detail)
+            ? error.detail.map(d => d.msg || JSON.stringify(d)).join('; ')
+            : error.detail;
+        throw new Error(detail || `Request failed (HTTP ${response.status})`);
     }
 
+    if (response.status === 204) return null;  // e.g. DELETE: no body
     return response.json();
 }
 
@@ -682,6 +687,8 @@ async function selectRepository(fullName) {
     const pullsCard = document.getElementById('repoPullsCard');
     setupCard.hidden = false;
     pullsCard.hidden = false;
+    document.getElementById('repoRegistriesCard').hidden = false;
+    loadRegistries(owner, repo);
     document.getElementById('repoSetupTitle').textContent = `Setup check: ${fullName}`;
     document.getElementById('repoSetupRef').textContent = '';
     document.getElementById('repoSetupBody').innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
@@ -789,7 +796,7 @@ function renderSetupGuide(g) {
             ${codeBlock('compose', g.compose_snippet)}
         </div>
         <div class="guide-step">
-            <h3><span class="num">3</span>Make the images public</h3>
+            <h3><span class="num">3</span>Give Ephemera access to the images</h3>
             <ol>${g.registry_steps.map(step => `<li>${richText(step)}</li>`).join('')}</ol>
             <p class="text-sm"><a href="${escapeHtml(g.docs_url)}" target="_blank" style="color:#6366f1;">GitHub's guide to package visibility</a></p>
         </div>
@@ -814,6 +821,84 @@ async function copyGuide(key, button) {
     const old = button.textContent;
     button.textContent = 'Copied';
     setTimeout(() => { button.textContent = old; }, 1500);
+}
+
+// ─── Private images (registry credentials) ──────────────
+
+const REGISTRY_HELP = {
+    'ghcr.io': 'GitHub Container Registry: your GitHub username and a personal access token (classic) with only the read:packages scope.',
+    'docker.io': 'Docker Hub: your Docker ID and an access token with Read-only permission.',
+    'other': 'The registry host (for example us-docker.pkg.dev), a username and a read-only token or password.',
+};
+
+async function loadRegistries(owner, repo) {
+    const body = document.getElementById('repoRegistriesBody');
+    let creds = [];
+    try {
+        creds = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/registries`) || [];
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p>Could not load registry tokens. ${escapeHtml(e.message)}</p></div>`;
+        return;
+    }
+    const list = creds.length ? `<table class="table"><thead><tr><th>Registry</th><th>Username</th><th>Added by</th><th>Updated</th><th></th></tr></thead><tbody>
+        ${creds.map(c => `<tr>
+            <td class="mono">${escapeHtml(c.registry)}</td>
+            <td class="mono text-muted">${escapeHtml(c.username)}</td>
+            <td class="text-muted">${escapeHtml(c.created_by_login || '-')}</td>
+            <td class="text-muted text-sm">${timeAgo(c.updated_at)}</td>
+            <td style="text-align:right;"><button class="btn btn-danger btn-sm" onclick="deleteRegistry('${escapeHtml(owner)}', '${escapeHtml(repo)}', ${c.id}, '${escapeHtml(c.registry)}')">Remove</button></td>
+        </tr>`).join('')}</tbody></table>`
+        : '<p class="reg-help" style="padding-top:16px;">No tokens yet: previews can only pull public images. Add one to keep your images private.</p>';
+    body.innerHTML = list + `
+        <form class="reg-form" onsubmit="saveRegistry(event, '${escapeHtml(owner)}', '${escapeHtml(repo)}')">
+            <div><label for="regKind">Registry</label>
+                <select id="regKind" onchange="registryKindChanged()">
+                    <option value="ghcr.io">GitHub Container Registry (ghcr.io)</option>
+                    <option value="docker.io">Docker Hub</option>
+                    <option value="other">Other registry…</option>
+                </select></div>
+            <div id="regHostWrap" hidden><label for="regHost">Registry host</label><input id="regHost" placeholder="us-docker.pkg.dev" autocomplete="off"></div>
+            <div><label for="regUser">Username</label><input id="regUser" autocomplete="off" required></div>
+            <div><label for="regToken">Read-only token</label><input id="regToken" type="password" autocomplete="new-password" required></div>
+            <div><button class="btn btn-primary" type="submit">Save token</button></div>
+        </form>
+        <p class="reg-help" id="regHelp">${escapeHtml(REGISTRY_HELP['ghcr.io'])} Tokens are encrypted and never shown again; previews use them from their next deploy.</p>`;
+}
+
+function registryKindChanged() {
+    const kind = document.getElementById('regKind').value;
+    document.getElementById('regHostWrap').hidden = kind !== 'other';
+    document.getElementById('regHelp').textContent = REGISTRY_HELP[kind] + ' Tokens are encrypted and never shown again; previews use them from their next deploy.';
+}
+
+async function saveRegistry(event, owner, repo) {
+    event.preventDefault();
+    const kind = document.getElementById('regKind').value;
+    const registry = kind === 'other' ? document.getElementById('regHost').value.trim() : kind;
+    const button = event.target.querySelector('button[type=submit]');
+    button.disabled = true;
+    try {
+        await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/registries`, {
+            method: 'PUT',
+            body: JSON.stringify({ registry, username: document.getElementById('regUser').value.trim(), token: document.getElementById('regToken').value }),
+        });
+        showToast(`Saved. Previews of ${owner}/${repo} pull from ${registry} with it from their next deploy.`);
+        await loadRegistries(owner, repo);
+    } catch (e) {
+        showToast('Could not save the token: ' + e.message, 'error');
+        button.disabled = false;
+    }
+}
+
+async function deleteRegistry(owner, repo, id, registry) {
+    if (!confirm(`Remove the ${registry} token? Previews that need it will fail to pull private images from their next deploy.`)) return;
+    try {
+        await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/registries/${id}`, { method: 'DELETE' });
+        showToast(`Removed the ${registry} token.`);
+        await loadRegistries(owner, repo);
+    } catch (e) {
+        showToast('Could not remove it: ' + e.message, 'error');
+    }
 }
 
 async function loadUsage(owner, repo) {

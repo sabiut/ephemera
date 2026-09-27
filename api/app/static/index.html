@@ -151,7 +151,7 @@
                     <ul>
                         <li>A <code>docker-compose.yml</code> in the repository root.</li>
                         <li>A web service with <code>ports:</code>. That is the link reviewers open.</li>
-                        <li>An image per commit in a public registry. Ephemera runs images; it doesn't build them. The dashboard generates the GitHub Actions workflow that does.</li>
+                        <li>An image per commit in a registry. Ephemera runs images; it doesn't build them. The dashboard generates the GitHub Actions workflow that does, and private images work with a read-only token you add per repository.</li>
                         <li>Databases, caches and queues run inside the preview, reachable by their compose names. Their data isn't kept.</li>
                     </ul>
                 </div>

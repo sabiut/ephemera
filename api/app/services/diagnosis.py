@@ -75,9 +75,9 @@ def explain(error: Optional[str], repository: str = "", commit_sha: str = "",
     if image_pull and any(k in lower for k in ("unauthorized", "denied", "forbidden", "401", "403", "authentication")):
         return d("image_private", "Image is private",
                  f"The cluster wasn't allowed to download the image for {_names(names)}.",
-                 "Ephemera pulls images without registry credentials, so the image must be public. "
-                 "For GitHub Container Registry: open the package, then Package settings → Change visibility → Public. "
-                 "Then retry.")
+                 "Add a read-only registry token for this repository (Repositories, then Private images; for "
+                 "GitHub Container Registry, a personal access token (classic) with read:packages). Or make the "
+                 "image public: open the package, then Package settings → Change visibility → Public. Then retry.")
     if image_pull:
         return d("image_pull", "Image couldn't be downloaded",
                  f"The cluster couldn't download the image for {_names(names)}.",

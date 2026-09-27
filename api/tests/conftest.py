@@ -40,6 +40,8 @@ def isolation_applies(monkeypatch):
     import app.tasks.environment as env_tasks
 
     monkeypatch.setattr(env_tasks.kubernetes_service, "secure_namespace", lambda ns: True)
+    # Likewise the registry pull Secret (tested in test_private_registries.py).
+    monkeypatch.setattr(env_tasks.kubernetes_service, "sync_pull_secret", lambda ns, config, name="ephemera-registry": True)
 
 
 @pytest.fixture(autouse=True)

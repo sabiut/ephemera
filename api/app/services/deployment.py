@@ -182,6 +182,16 @@ class DeploymentService:
         self.k8s = kubernetes_service
         self.github = github_service
         self.base_domain = base_domain
+        # namespace -> image pull Secret name, set by the deploy task from the
+        # repository's registry credentials before it applies manifests; both
+        # the converter and the AI path apply through this object.
+        self.pull_secrets: Dict[str, str] = {}
+
+    def set_pull_secret(self, namespace: str, secret_name: Optional[str]) -> None:
+        if secret_name:
+            self.pull_secrets[namespace] = secret_name
+        else:
+            self.pull_secrets.pop(namespace, None)
 
     # ------------------------------------------------------------------ fetch
 
@@ -450,6 +460,13 @@ class DeploymentService:
             if refused:
                 logger.error(f"Refused Deployment/{name}: {refused}")
                 return False
+            pull_secret = self.pull_secrets.get(namespace)
+            if pull_secret:
+                pod = manifest["spec"]["template"].setdefault("spec", {})
+                secrets = [s for s in pod.get("imagePullSecrets") or [] if isinstance(s, dict)]
+                if pull_secret not in {s.get("name") for s in secrets}:
+                    secrets.append({"name": pull_secret})
+                pod["imagePullSecrets"] = secrets
 
         if kind == "Deployment" and revision:
             template_meta = manifest.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {})

@@ -195,18 +195,19 @@ def build_guide(repo: InstalledRepository, compose_text: Optional[str]) -> Setup
     guide.registry_steps = [
         f"Commit the workflow and the compose change on a branch and open a pull request. Its first run "
         f"creates the package{'s' if len(guide.services) > 1 else ''} ({packages}) in GitHub Container Registry.",
-        "On GitHub, open your profile or organisation, then Packages, then each package above.",
-        "Open Package settings, then Change visibility, and choose Public. Ephemera pulls images without "
-        "registry credentials, so a private package fails with \"Image is private\".",
+        "Give Ephemera read access to the images. For private code, add a read-only token under Private images "
+        "(for GitHub Container Registry: a personal access token (classic) with only the read:packages scope). "
+        "Otherwise make each package public: on GitHub, open Packages, then the package, then Package settings, "
+        "then Change visibility.",
         "Back on the pull request, retry the preview (or push a commit). From then on every commit is built "
         "and previewed automatically.",
     ]
     guide.message = (f"{len(guide.services)} service{'s' if len(guide.services) > 1 else ''} "
                      f"need{'' if len(guide.services) > 1 else 's'} an image built for each commit.")
     if repo.private:
-        guide.notes.append("This repository is private, but the images must be public for Ephemera to pull "
-                           "them, and anyone could then download the code built into them. If that isn't "
-                           "acceptable, talk to your Ephemera administrator before continuing.")
+        guide.notes.append("This repository is private: keep the images private too and add a read-only registry "
+                           "token under Private images, rather than making the packages public (anyone could "
+                           "then download the code built into them).")
     guide.notes.append("Pull requests from forks get a read-only token, so this workflow can't push their "
                        "images and their previews will wait for an image that never arrives.")
     return guide
