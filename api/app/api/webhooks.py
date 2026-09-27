@@ -169,6 +169,16 @@ def handle_pull_request_synchronize(payload: PullRequestWebhook):
             environment is not None and environment.closed_at is None
             and environment.status in (EnvironmentStatus.DESTROYING, EnvironmentStatus.DESTROYED)
         )
+        if removed_but_open and environment.removal_reason == "stopped":
+            # Stopped on purpose: a push does not bring it back. Say so on
+            # the commit instead of leaving it without a status.
+            logger.info(f"Environment {environment.namespace} was stopped; not redeploying {commit_sha[:7]}")
+            if installation_id:
+                github_service.update_pr_status(
+                    installation_id=installation_id, repo_full_name=repo.full_name, commit_sha=commit_sha,
+                    state="success", description="Not deployed: preview stopped (recreate it in the dashboard)",
+                )
+            return
         if not environment or environment.status == EnvironmentStatus.FAILED or removed_but_open:
             # No record, the last attempt failed, or the preview was removed
             # while the PR stayed open (it expired after days without a

@@ -335,8 +335,9 @@ function timeAgo(dateStr) {
 // phones cannot show).
 function envErrorHTML(env) {
     const s = (env.status || '').toLowerCase();
-    if (s === 'destroyed' && env.removal_reason === 'expired') {
-        return `<div class="text-sm" style="margin-top:4px;"><a class="row-link" style="color:#a5b4fc;" onclick="openEnvironment(${env.id})">Expired: recreate</a></div>`;
+    if (s === 'destroyed' && ['expired', 'stopped'].includes(env.removal_reason)) {
+        const label = env.removal_reason === 'stopped' ? 'Stopped' : 'Expired';
+        return `<div class="text-sm" style="margin-top:4px;"><a class="row-link" style="color:#a5b4fc;" onclick="openEnvironment(${env.id})">${label}: recreate</a></div>`;
     }
     if (s !== 'failed') return '';
     const title = (env.diagnosis && env.diagnosis.title) || 'Preview failed';
@@ -456,6 +457,7 @@ function renderEnvironmentDetail() {
     const status = (env.status || '').toLowerCase();
     const repo = env.repository_full_name;
     const sha = env.commit_sha || '';
+    const running = ['pending', 'provisioning', 'ready', 'updating', 'failed'].includes(status);
     document.getElementById('envDetailTitle').textContent = `${repo} #${env.pr_number}`;
 
     const meta = `<div class="detail-meta">
@@ -486,6 +488,8 @@ function renderEnvironmentDetail() {
     } else if (PENDING_STATUSES.includes(status)) {
         const total = env.deploy_started_at ? ` · ${sinceHTML(env.deploy_started_at)} so far` : '';
         main = `<div class="detail-note">Deploying commit <code>${escapeHtml(sha.slice(0, 7))}</code>${total}. This updates automatically.</div>${stepperHTML(env)}`;
+    } else if (status === 'destroyed' && env.removal_reason === 'stopped') {
+        main = `<div class="detail-note">Stopped. The pull request is still open, but new commits won't bring the preview back until you recreate it.</div>`;
     } else if (status === 'destroyed' && env.removal_reason === 'expired') {
         main = `<div class="detail-note">Removed after a period with no new commits, to free resources. Push a commit to the pull request, or recreate it here.</div>`;
     } else if (status === 'destroyed') {
@@ -501,13 +505,54 @@ function renderEnvironmentDetail() {
             return `<li><span class="mono">${escapeHtml(d.commit_sha.slice(0, 7))}</span>${attemptBadge(d.status)}<span class="text-muted">${timeAgo(d.created_at)}</span>${why}</li>`;
         }).join('')}</ul>`;
     }
-    body.innerHTML = prTitle + meta + main + history;
+    let expiry = '';
+    if (running && env.expires_at) {
+        const when = new Date(env.expires_at);
+        const label = when.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+        expiry = `<div class="detail-note" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+            <span style="flex:1;min-width:200px;">Removed <strong>${escapeHtml(label)}</strong> if there are no new commits before then, to free resources.</span>
+            <button class="btn btn-ghost btn-sm" onclick="keepEnvironment(${env.id}, this)">Keep available</button></div>`;
+    }
+    body.innerHTML = prTitle + meta + main + expiry + history;
 
-    const expired = status === 'destroyed' && env.removal_reason === 'expired';
+    const recreatable = status === 'destroyed' && ['expired', 'stopped'].includes(env.removal_reason);
     const retry = status === 'failed'
         ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Retry preview</button>`
-        : expired ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Recreate preview</button>` : '';
-    footer.innerHTML = `<button class="btn btn-ghost" onclick="closeEnvironmentDetail()">Close</button>${retry}`;
+        : recreatable ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Recreate preview</button>` : '';
+    const stop = running
+        ? `<button class="btn btn-danger" onclick="stopEnvironment(${env.id}, this)">Stop preview</button>` : '';
+    footer.innerHTML = `${stop}<span style="flex:1"></span><button class="btn btn-ghost" onclick="closeEnvironmentDetail()">Close</button>${retry}`;
+}
+
+async function stopEnvironment(id, button) {
+    const env = cachedEnvironments.find(e => e.id === id);
+    if (!env) return;
+    if (!confirm(`Stop the preview for #${env.pr_number}? The pull request stays open and its slot is freed. New commits won't bring it back until you recreate it.`)) return;
+    if (button) { button.disabled = true; button.textContent = 'Stopping…'; }
+    try {
+        await apiCall(`/api/v1/environments/${id}/stop`, { method: 'POST' });
+        showToast(`Stopping the preview for #${env.pr_number}.`);
+        await loadEnvironments();
+        renderEnvironmentDetail();
+        startAutoRefresh();
+    } catch (e) {
+        showToast('Could not stop: ' + e.message, 'error');
+        if (button) { button.disabled = false; button.textContent = 'Stop preview'; }
+    }
+}
+
+async function keepEnvironment(id, button) {
+    if (button) { button.disabled = true; button.textContent = 'Keeping…'; }
+    try {
+        const updated = await apiCall(`/api/v1/environments/${id}/keep`, { method: 'POST' });
+        const i = cachedEnvironments.findIndex(e => e.id === id);
+        if (i >= 0) cachedEnvironments[i] = updated;
+        renderEnvironmentDetail();
+        showToast('Kept available: the idle timer starts again now.');
+    } catch (e) {
+        showToast('Could not keep it available: ' + e.message, 'error');
+        if (button) { button.disabled = false; button.textContent = 'Keep available'; }
+    }
 }
 
 async function retryEnvironment(id, button) {
@@ -519,7 +564,8 @@ async function retryEnvironment(id, button) {
             method: 'POST',
             body: JSON.stringify({ repository_full_name: env.repository_full_name, pr_number: env.pr_number }),
         });
-        showToast(`Retrying #${env.pr_number}. This view updates as it deploys.`);
+        const verb = (env.status || '').toLowerCase() === 'destroyed' ? 'Recreating' : 'Retrying';
+        showToast(`${verb} #${env.pr_number}. This view updates as it deploys.`);
         await loadEnvironments();
         renderEnvironmentDetail();
         const hash = window.location.hash.slice(1) || 'overview';
@@ -770,7 +816,23 @@ async function copyGuide(key, button) {
     setTimeout(() => { button.textContent = old; }, 1500);
 }
 
+async function loadUsage(owner, repo) {
+    const el = document.getElementById('repoUsage');
+    try {
+        const u = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/usage`);
+        el.textContent = u.limit > 0
+            ? `${u.used} of ${u.limit} previews used`
+            : `${u.used} preview${u.used === 1 ? '' : 's'} running (no limit)`;
+        el.style.color = u.limit > 0 && u.used >= u.limit ? '#f87171' : '';
+        el.title = u.limit > 0 && u.used >= u.limit
+            ? 'At the limit: stop a preview you don\'t need (Details, then Stop preview) to make room.' : '';
+    } catch (e) {
+        el.textContent = '';
+    }
+}
+
 async function loadPulls(owner, repo) {
+    loadUsage(owner, repo);
     const body = document.getElementById('repoPullsBody');
     try {
         const pulls = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`);

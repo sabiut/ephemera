@@ -3,7 +3,12 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from app.models.deployment import DeploymentStatus
 from app.models.environment import EnvironmentStatus
+from app.services import lifecycle
 from app.services.diagnosis import explain
+
+# Statuses whose preview is still running (or failing) and so can expire.
+_HOLDS_RESOURCES = (EnvironmentStatus.PENDING, EnvironmentStatus.PROVISIONING, EnvironmentStatus.READY,
+                    EnvironmentStatus.UPDATING, EnvironmentStatus.FAILED)
 
 
 class EnvironmentCreate(BaseModel):
@@ -52,12 +57,21 @@ class EnvironmentResponse(BaseModel):
     updated_at: Optional[datetime]
     destroyed_at: Optional[datetime]
     removal_reason: Optional[str] = None
+    kept_at: Optional[datetime] = None
     stage: Optional[str] = None
     stage_detail: Optional[str] = None
     stage_started_at: Optional[datetime] = None
     deploy_started_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def expires_at(self) -> Optional[datetime]:
+        """When this preview will be removed if nothing happens, or None."""
+        if self.status not in _HOLDS_RESOURCES:
+            return None
+        return lifecycle.expires_at(self)
 
     @computed_field
     @property

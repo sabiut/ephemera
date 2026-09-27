@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,7 +14,7 @@ from app.crud import deployment as deployment_crud
 from app.schemas.environment import DeploymentResponse, EnvironmentCreate, EnvironmentResponse
 from app.services import repo_access
 from app.services.github import GitHubUnavailable, github_service
-from app.services.provisioning import EnvironmentRequest, PreviewLimitReached, request_environment
+from app.services.provisioning import HOLDS_RESOURCES, EnvironmentRequest, PreviewLimitReached, request_environment
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,55 @@ async def get_environment(
     )
     if not environment:
         raise HTTPException(status_code=404, detail="Environment not found")
+    return environment
+
+
+def _visible_or_404(db: Session, user: User, environment_id: int):
+    admin = is_admin(user)
+    environment = environment_crud.get_visible_environment(
+        db, user, admin, environment_id=environment_id,
+        repo_names=None if admin else repo_access.accessible_repo_names(user, admin),
+    )
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+    return environment
+
+
+@router.post("/{environment_id}/stop", response_model=EnvironmentResponse, status_code=202)
+def stop_environment(
+    environment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Stop a preview while its pull request stays open, freeing its slot in the
+    repository's limit. New commits do not bring it back; recreate it with
+    POST /environments/ when it is needed again. Anyone who can see the
+    preview (its author, the repository's collaborators, admins) may stop it.
+    """
+    from app.tasks.environment import destroy_environment  # avoid import cycle
+
+    environment = _visible_or_404(db, current_user, environment_id)
+    if environment.status not in HOLDS_RESOURCES:
+        raise HTTPException(status_code=409, detail=f"This preview is {environment.status.value}; there is nothing to stop")
+    destroy_environment.delay(environment_id=environment.id, stopped=True, stopped_by=current_user.github_login)
+    logger.info(f"{current_user.github_login} stopped {environment.namespace}")
+    return environment
+
+
+@router.post("/{environment_id}/keep", response_model=EnvironmentResponse)
+def keep_environment(
+    environment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Keep a preview available: restarts its idle timer, pushing back expires_at."""
+    environment = _visible_or_404(db, current_user, environment_id)
+    if environment.status not in HOLDS_RESOURCES:
+        raise HTTPException(status_code=409, detail=f"This preview is {environment.status.value}; recreate it instead")
+    environment.kept_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(environment)
     return environment
 
 

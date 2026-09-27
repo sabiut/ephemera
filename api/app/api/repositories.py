@@ -13,7 +13,7 @@ from app.api.dependencies import get_current_user, is_admin
 from app.crud import environment as environment_crud
 from app.database import get_db
 from app.models import User
-from app.services import repo_access, setup_check, setup_guide
+from app.services import provisioning, repo_access, setup_check, setup_guide
 from app.services.github import GitHubUnavailable, InstalledRepository, github_service
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -107,6 +107,21 @@ async def image_setup_guide(owner: str, repo: str, pr: Optional[int] = None,
     ref, _ = _resolve_ref(installed, pr)
     _, content = setup_check._fetch_compose(installed, ref or installed.default_branch)
     return setup_guide.build_guide(installed, content).as_dict()
+
+
+class UsageResponse(BaseModel):
+    used: int
+    limit: int                 # 0: unlimited
+    pull_requests: List[int]   # PRs whose previews hold a slot
+
+
+@router.get("/repositories/{owner}/{repo}/usage", response_model=UsageResponse)
+async def repository_usage(owner: str, repo: str, db: Session = Depends(get_db),
+                           current_user: User = Depends(get_current_user)):
+    """How many of the repository's preview slots are in use ("3 of 5")."""
+    installed = _accessible_repo(owner, repo, current_user)
+    prs, limit = provisioning.repository_usage(db, installed.full_name)
+    return UsageResponse(used=len(prs), limit=limit, pull_requests=prs)
 
 
 class PullResponse(BaseModel):
