@@ -40,7 +40,8 @@ class PreviewLimitReached(Exception):
         prs = ", ".join(f"#{n}" for n in pr_numbers)
         super().__init__(
             f"This repository already has {len(pr_numbers)} previews (the limit is {limit}): {prs}. "
-            "Close one of those pull requests, or wait for an idle one to expire, then push a commit "
+            "Stop one you don't need right now (Ephemera dashboard: Details, then Stop preview), "
+            "close one of those pull requests, or wait for an idle one to expire. Then push a commit "
             "or retry the preview."
         )
 
@@ -57,6 +58,15 @@ def _admission_lock(db: Session, repository_full_name: str) -> None:
         return
     key = int.from_bytes(hashlib.sha256(repository_full_name.lower().encode()).digest()[:8], "big", signed=True)
     db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
+
+def repository_usage(db: Session, repository_full_name: str) -> "tuple[List[int], int]":
+    """(PR numbers holding a preview, the limit; 0 means unlimited) for a repository."""
+    rows = db.query(Environment.pr_number).filter(
+        Environment.repository_full_name == repository_full_name,
+        Environment.status.in_(HOLDS_RESOURCES),
+    ).order_by(Environment.pr_number).all()
+    return [row[0] for row in rows], settings.preview_max_active_per_repository
 
 
 def _check_limit(db: Session, req: "EnvironmentRequest") -> None:

@@ -68,6 +68,9 @@ class Environment(Base):
     # Set before the namespace is deleted and kept through cleanup retries,
     # so a slow deletion does not lose it; cleared when recreated.
     removal_reason = Column(String, nullable=True)
+    # When someone last chose "Keep available" in the dashboard: counts as
+    # activity, so the idle expiry starts again from here.
+    kept_at = Column(DateTime(timezone=True), nullable=True)
 
     # Progress of the current deployment, for the dashboard: a stage key
     # (see STAGES), a human detail such as which image it waits for, when the
