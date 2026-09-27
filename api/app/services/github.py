@@ -310,14 +310,16 @@ class GitHubService:
         return None
 
     @staticmethod
-    def build_environment_url(pr_number: int, repo_name: str) -> str:
+    def build_environment_url(pr_number: int, repo_full_name: str, namespace: Optional[str] = None) -> str:
         """
         Build the environment URL for a PR: https://{namespace}.{base_domain}
 
         Individual services are exposed at {namespace}-{service}.{base_domain};
-        this is the umbrella address shown before any service is known.
+        this is the umbrella address shown before any service is known. An
+        existing environment passes its stored namespace, which may predate
+        the current naming scheme.
         """
-        return f"https://{build_namespace(repo_name, pr_number)}.{settings.base_domain}"
+        return f"https://{namespace or build_namespace(repo_full_name, pr_number)}.{settings.base_domain}"
 
 
 # Singleton instance

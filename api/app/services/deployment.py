@@ -8,6 +8,7 @@ This service handles:
 - Applying manifests (of any supported kind) to namespaces
 """
 
+import hashlib
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -68,8 +69,19 @@ def parse_port(port: Any) -> Optional[Tuple[int, int]]:
 
 
 def service_hostname(namespace: str, service_name: str, base_domain: str) -> str:
-    """Public hostname for a service: {namespace}-{service}.{base_domain}."""
-    return f"{namespace}-{service_name}.{base_domain}"
+    """
+    Public hostname for a service: {namespace}-{service}.{base_domain}.
+
+    The first label must fit DNS's 63 characters. A service name too long for
+    that is shortened and given a short hash of the full name, so two long
+    names that share a prefix still get different hostnames.
+    """
+    label = f"{namespace}-{service_name}"
+    if len(label) > 63:
+        digest = hashlib.sha256(service_name.encode()).hexdigest()[:6]
+        room = 63 - len(namespace) - 1 - len(digest) - 1
+        label = f"{namespace}-{service_name[:max(room, 1)].rstrip('-')}-{digest}"
+    return f"{label}.{base_domain}"
 
 
 # Service names that usually mean "the thing a reviewer opens", in order.

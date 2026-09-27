@@ -54,7 +54,8 @@ def request_environment(db: Session, req: EnvironmentRequest) -> Tuple[Environme
         logger.info(f"Environment {existing.namespace} already live for PR #{req.pr_number}")
         return existing, "exists"
 
-    env_url = github_service.build_environment_url(req.pr_number, req.repository_name)
+    env_url = github_service.build_environment_url(
+        req.pr_number, req.repository_full_name, namespace=existing.namespace if existing else None)
 
     if existing:
         environment = environment_crud.reset_environment(

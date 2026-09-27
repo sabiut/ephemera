@@ -448,7 +448,8 @@ class ManifestValidator:
         pattern = re.compile(
             rf"^{re.escape(self._expected_namespace)}-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.{re.escape(self.base_domain)}$"
         )
-        return bool(pattern.match(host.lower()))
+        # DNS labels are at most 63 characters; a longer one fails at apply.
+        return bool(pattern.match(host.lower())) and len(host.split(".", 1)[0]) <= 63
 
     def _validate_pvc(
         self, prefix: str, name: str, spec: Dict, result: ValidationResult
