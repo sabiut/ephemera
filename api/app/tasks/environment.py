@@ -27,6 +27,7 @@ from app.services.deployment import deployment_service
 from app.services.github import github_service
 from app.services.kubernetes import kubernetes_service
 from app.services.deployment import choose_primary_url, probe_urls
+from app.services import registries
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,14 @@ def _run_deployment(
             environment_crud.set_stage(db, environment_id, name, detail, commit_sha=commit_sha)
         except Exception as e:
             logger.warning(f"Could not record stage {name} for environment {environment_id}: {e}")
+
+    # Private images: the repository's registry credentials become the
+    # namespace's pull Secret, referenced by every Deployment. Removing the
+    # last credential removes the Secret on the next deploy.
+    docker_config = registries.docker_config(registries.credentials_for(db, repo_full_name))
+    if not kubernetes_service.sync_pull_secret(namespace, docker_config, registries.PULL_SECRET_NAME):
+        raise RuntimeError("Could not store the repository's registry credentials in the preview")
+    deployment_service.set_pull_secret(namespace, registries.PULL_SECRET_NAME if docker_config else None)
 
     stage("deploying", "Reading docker-compose.yml and applying the services")
     result = _active_deployment_service().deploy_application(

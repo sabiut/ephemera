@@ -3,6 +3,7 @@ Repositories the caller can work with: the ones the Ephemera GitHub App is
 installed on and the caller collaborates on (all of them for admins).
 """
 
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +14,7 @@ from app.api.dependencies import get_current_user, is_admin
 from app.crud import environment as environment_crud
 from app.database import get_db
 from app.models import User
-from app.services import provisioning, repo_access, setup_check, setup_guide
+from app.services import provisioning, registries, repo_access, setup_check, setup_guide
 from app.services.github import GitHubUnavailable, InstalledRepository, github_service
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -107,6 +108,62 @@ async def image_setup_guide(owner: str, repo: str, pr: Optional[int] = None,
     ref, _ = _resolve_ref(installed, pr)
     _, content = setup_check._fetch_compose(installed, ref or installed.default_branch)
     return setup_guide.build_guide(installed, content).as_dict()
+
+
+class RegistryCredentialResponse(BaseModel):
+    id: int
+    registry: str
+    username: str
+    created_by_login: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class RegistryCredentialIn(BaseModel):
+    registry: str
+    username: str
+    token: str
+
+
+def _registry_out(c) -> RegistryCredentialResponse:
+    return RegistryCredentialResponse(id=c.id, registry=registries.display_registry(c.registry), username=c.username,
+                                      created_by_login=c.created_by_login, updated_at=c.updated_at or c.created_at)
+
+
+@router.get("/repositories/{owner}/{repo}/registries", response_model=List[RegistryCredentialResponse])
+async def list_registry_credentials(owner: str, repo: str, db: Session = Depends(get_db),
+                                    current_user: User = Depends(get_current_user)):
+    """The repository's registry credentials. Tokens are never returned."""
+    installed = _accessible_repo(owner, repo, current_user)
+    return [_registry_out(c) for c in registries.credentials_for(db, installed.full_name)]
+
+
+@router.put("/repositories/{owner}/{repo}/registries", response_model=RegistryCredentialResponse)
+def save_registry_credential(owner: str, repo: str, body: RegistryCredentialIn, db: Session = Depends(get_db),
+                             current_user: User = Depends(get_current_user)):
+    """
+    Add or replace the token previews of this repository use to pull private
+    images from one registry. Any collaborator may set it; it is shared by
+    the repository's previews and takes effect on the next deploy.
+    """
+    installed = _accessible_repo(owner, repo, current_user)
+    try:
+        record = registries.upsert(db, installed.full_name, body.registry, body.username, body.token,
+                                   created_by=current_user.github_login)
+    except registries.InvalidRegistry as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _registry_out(record)
+
+
+@router.delete("/repositories/{owner}/{repo}/registries/{credential_id}", status_code=204)
+def delete_registry_credential(owner: str, repo: str, credential_id: int, db: Session = Depends(get_db),
+                               current_user: User = Depends(get_current_user)):
+    """Remove a registry credential; previews stop using it on their next deploy."""
+    installed = _accessible_repo(owner, repo, current_user)
+    record = next((c for c in registries.credentials_for(db, installed.full_name) if c.id == credential_id), None)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Registry credential not found")
+    db.delete(record)
+    db.commit()
 
 
 class UsageResponse(BaseModel):

@@ -74,11 +74,14 @@ def test_missing_or_broken_compose_is_explained():
 
 def test_registry_access_and_caveats_are_spelled_out():
     g = build_guide(REPO, "services:\n  web:\n    build: .\n")
-    assert any("Change visibility" in s and "Public" in s for s in g.registry_steps)
+    access = next(s for s in g.registry_steps if "read access" in s)
+    assert "read-only token under Private images" in access and "read:packages" in access  # private route first
+    assert "Change visibility" in access                                                     # public route too
     assert any("forks" in n for n in g.notes)
     assert not any("private" in n.lower() for n in g.notes)
     private = InstalledRepository(**{**REPO.__dict__, "private": True})
-    assert any("This repository is private" in n for n in build_guide(private, "services:\n  web:\n    build: .\n").notes)
+    note = next(n for n in build_guide(private, "services:\n  web:\n    build: .\n").notes if "This repository is private" in n)
+    assert "keep the images private" in note
 
 
 def test_the_setup_check_says_when_the_guide_applies():

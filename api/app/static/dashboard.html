@@ -477,6 +477,10 @@
         .code-block .copy { position: absolute; top: 8px; right: 8px; }
         .code-path { font-family: ui-monospace, monospace; font-size: 13px; color: #a5b4fc; }
         .guide-note { border-left: 3px solid #eab308; background: #1a1708; padding: 10px 12px; border-radius: 6px; color: #d6c88a; font-size: 13px; margin-top: 10px; }
+        .reg-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; padding: 16px 20px; align-items: end; }
+        .reg-form label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+        .reg-form input, .reg-form select { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; color: #e5e5e5; border-radius: 6px; padding: 8px 10px; font-size: 14px; }
+        .reg-help { padding: 0 20px 16px; color: #888; font-size: 13px; }
         .row-link { color: #fca5a5; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
         .modal-header {
@@ -868,6 +872,13 @@
                         <span class="text-muted text-sm" id="repoSetupRef"></span>
                     </div>
                     <div class="card-body" id="repoSetupBody"></div>
+                </div>
+                <div class="card" id="repoRegistriesCard" hidden>
+                    <div class="card-header">
+                        <span class="card-title">Private images</span>
+                        <span class="text-muted text-sm">Read-only registry tokens this repository's previews pull with</span>
+                    </div>
+                    <div class="card-body" id="repoRegistriesBody"></div>
                 </div>
                 <div class="card" id="repoPullsCard" hidden>
                     <div class="card-header">
