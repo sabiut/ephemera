@@ -60,7 +60,7 @@ class FakeGCP:
         self.statuses = list(statuses)
         self.final = final or {}
         self.log = log
-        self.uploaded, self.created, self.cancelled = [], [], []
+        self.uploaded, self.created, self.cancelled, self.deleted = [], [], [], []
 
     def upload(self, bucket, name, path):
         self.uploaded.append((bucket, name))
@@ -80,6 +80,9 @@ class FakeGCP:
 
     def download(self, bucket, name):
         return self.log.encode()
+
+    def delete_object(self, bucket, name):
+        self.deleted.append((bucket, name))
 
 
 def _build(db, env, gcp, superseded=lambda: None, stages=None, compose=COMPOSE):

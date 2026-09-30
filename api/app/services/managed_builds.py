@@ -7,15 +7,21 @@ For an allowlisted repository with managed builds confirmed, the deploy task
 calls build_commit before applying the services:
 
 1. detect the plan at the commit (the same detection the dashboard shows);
-2. refuse pull requests from forks (approval comes with the limits step);
+2. build a fork's commit only once a collaborator with write access
+   approved it; stop at the repository's monthly build minutes;
 3. give the repository its build slot, a service account and registry that
-   only it uses (created by Terraform, modules/managed-builds);
+   only it uses (created by Terraform, modules/managed-builds), and wait
+   (the deploy is rescheduled) while the repository's own build or the
+   platform's build capacity is in use;
 4. fetch the commit's source through the GitHub App, strip GitHub's top
    directory, and upload it under the slot's prefix of the source bucket;
 5. run one Cloud Build as the slot's account: a docker build per service,
    pushed to the slot's registry as <service>:<commit>;
 6. poll it, cancelling if a newer commit arrives, and record the result,
-   the log's tail and the billed time.
+   the log's tail and the billed time; delete the uploaded source.
+
+prune (hourly) deletes image tags no preview runs, and wipes the slot of a
+repository that turned managed builds off before releasing it.
 
 The build receives no credentials: the source is a tarball, and the only
 identity it has is the slot's, which can push to its own registry and
@@ -29,7 +35,7 @@ import tarfile
 import tempfile
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any, Callable, Dict, List, Optional
 
@@ -39,7 +45,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Build, Environment, RepositorySettings
+from app.models import Build, BuildApproval, Environment, RepositorySettings
 from app.services.build_plan import PlannedService, detect, differences
 from app.services.compose import commit_variables, interpolate
 from app.services.gcp import GCPClient, GCPError
@@ -49,6 +55,8 @@ logger = logging.getLogger(__name__)
 
 DOCKER = "gcr.io/cloud-builders/docker"
 _SLOTS_LOCK = 0x6570_6d62_736c_6f74  # "epmbslot": one slot assignment at a time
+_CAPACITY_LOCK = 0x6570_6d62_6361_7021  # "epmbcap!": one capacity check and start at a time
+RUNNING = ("queued", "building")
 _DONE = {"SUCCESS", "FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED"}
 _PLATFORM_FAILURE = ("Ephemera could not run the build (a problem on Ephemera's side, not in your repository). "
                      "Retry the deployment; if it keeps failing, contact support.")
@@ -66,6 +74,9 @@ class BuildOutcome:
     notes: List[str] = field(default_factory=list)
     build_id: Optional[int] = None
     duration_seconds: Optional[int] = None
+    # Set when no build can start now (the repository's build or the
+    # platform's are all running): the deploy is tried again shortly.
+    wait: Optional[str] = None
 
 
 # ------------------------------------------------------------------ names (modules/managed-builds)
@@ -124,6 +135,66 @@ def assign_slot(db: Session, row: RepositorySettings) -> Optional[int]:
     db.commit()
     logger.info(f"Assigned build slot {free} to {row.repository_full_name}")
     return free
+
+
+# ------------------------------------------------------------------ limits
+
+def _month(now: datetime) -> "tuple[datetime, datetime]":
+    start = now.astimezone(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end = start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
+    return start, end
+
+
+def _aware(value: Optional[datetime]) -> Optional[datetime]:
+    return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
+def minutes_used(db: Session, repository_full_name: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    The repository's build minutes this calendar month (UTC): each finished
+    build counts its billed time in whole minutes, rounded up.
+    """
+    start, end = _month(now or datetime.now(timezone.utc))
+    rows = db.query(Build.duration_seconds, Build.created_at).filter(
+        func.lower(Build.repository_full_name) == repository_full_name.lower(),
+        Build.duration_seconds.isnot(None)).all()
+    used = sum(-(-seconds // 60) for seconds, created in rows if start <= (_aware(created) or start) < end)
+    return {"minutes_used": used, "minutes_limit": settings.managed_builds_monthly_minutes, "resets_at": end}
+
+
+def _running_since() -> datetime:
+    """Builds older than this are not counted as running, whatever their record says (a crashed worker)."""
+    seconds = settings.managed_builds_timeout_seconds + settings.managed_builds_queue_allowance_seconds + 300
+    return datetime.now(timezone.utc) - timedelta(seconds=seconds)
+
+
+def _no_room(db: Session, repository_full_name: str) -> Optional[str]:
+    running = [(r, _aware(c)) for r, c in db.query(Build.repository_full_name, Build.created_at)
+               .filter(Build.status.in_(RUNNING)).all()]
+    since = _running_since()
+    running = [r for r, c in running if c is None or c >= since]
+    mine = sum(1 for r in running if r.lower() == repository_full_name.lower())
+    if mine >= settings.managed_builds_max_per_repository:
+        return "another build of this repository is running"
+    if len(running) >= settings.managed_builds_max_running:
+        return "all build machines are busy"
+    return None
+
+
+def approved(db: Session, repository_full_name: str, pr_number: int, commit_sha: str) -> Optional[BuildApproval]:
+    return db.query(BuildApproval).filter(
+        func.lower(BuildApproval.repository_full_name) == repository_full_name.lower(),
+        BuildApproval.pr_number == pr_number, BuildApproval.commit_sha == commit_sha).first()
+
+
+def approve(db: Session, repository_full_name: str, pr_number: int, commit_sha: str, login: str) -> BuildApproval:
+    record = approved(db, repository_full_name, pr_number, commit_sha)
+    if record is None:
+        record = BuildApproval(repository_full_name=repository_full_name, pr_number=pr_number,
+                               commit_sha=commit_sha, approved_by_login=login)
+        db.add(record)
+        db.commit()
+    return record
 
 
 # ------------------------------------------------------------------ source
@@ -293,6 +364,14 @@ def _failure(build: Dict[str, Any], log: str) -> "tuple[str, str]":
     return "build_step_failed", f"Building {service} failed: {last[:300]}" if last else f"Building {service} failed."
 
 
+def _delete_source(gcp: GCPClient, name: str) -> None:
+    """The commit's source is only needed while the build fetches it; the bucket's 1-day rule is the backstop."""
+    try:
+        gcp.delete_object(source_bucket(), name)
+    except GCPError as e:
+        logger.warning(f"Could not delete build source {name}: {e}")
+
+
 def _record(db: Session, row: Build, **fields) -> None:
     for k, v in fields.items():
         setattr(row, k, v)
@@ -344,11 +423,20 @@ def build_commit(
 
     pull = github_service.get_pull_request(installation_id, repository_full_name, environment.pr_number)
     head = (pull.head_repository_full_name or "") if pull else repository_full_name
-    if head.lower() != repository_full_name.lower():
-        outcome.error = ("This pull request comes from a fork, and managed builds don't build forks yet "
-                         "(a maintainer's approval for each commit is coming). Push the branch to this "
-                         "repository to get a preview.")
+    if head.lower() != repository_full_name.lower() and not approved(db, repository_full_name,
+                                                                    environment.pr_number, commit_sha):
+        outcome.error = (f"This pull request comes from a fork, so building commit {commit_sha[:7]} needs a "
+                         "collaborator's approval: someone with write access opens this preview on the Ephemera "
+                         "dashboard and clicks Approve build. Each new push needs approving again.")
         outcome.category = "build_fork_pending"
+        return outcome
+
+    usage = minutes_used(db, repository_full_name)
+    if usage["minutes_limit"] > 0 and usage["minutes_used"] >= usage["minutes_limit"]:
+        outcome.error = (f"This repository has used its {usage['minutes_limit']} build minutes for this month; "
+                         f"they reset on {usage['resets_at']:%B} {usage['resets_at'].day}. Until then, previews "
+                         "can use images built by your CI (see the setup guide).")
+        outcome.category = "build_limit"
         return outcome
 
     slot = assign_slot(db, row)
@@ -361,11 +449,19 @@ def build_commit(
         compose = yaml.safe_load(interpolate(compose_text, commit_variables(commit_sha, repository_full_name)).text) or {}
     except yaml.YAMLError:
         compose = {}
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _CAPACITY_LOCK})
+    busy = _no_room(db, repository_full_name)
+    if busy:
+        db.rollback()
+        outcome.wait = busy
+        stage("building", f"Waiting to build: {busy}")
+        return outcome
     record = Build(environment_id=environment.id, repository_full_name=repository_full_name,
                    pr_number=environment.pr_number, commit_sha=commit_sha, slot=slot, status="queued",
                    services={s.name: "queued" for s in services})
     db.add(record)
-    db.commit()
+    db.commit()  # releases the capacity lock with this build counted
     outcome.build_id = record.id
     gcp = gcp or gcp_client()
     source = source or fetch_source
@@ -410,10 +506,12 @@ def build_commit(
         newer = superseded()
         if newer:
             gcp.cancel_build(cloud_id)
+            _delete_source(gcp, source_object)
             return fail("build_superseded", f"A newer commit ({newer[:7]}) arrived; this build was cancelled.",
                         status="cancelled")
         if clock() > deadline:
             gcp.cancel_build(cloud_id)
+            _delete_source(gcp, source_object)
             return fail("build_timeout", f"The build did not finish within "
                         f"{settings.managed_builds_timeout_seconds // 60} minutes and was stopped.", status="timeout")
         progress = _progress(build)
@@ -426,6 +524,7 @@ def build_commit(
             _record(db, record, services=progress)
         sleep(settings.managed_builds_poll_seconds)
 
+    _delete_source(gcp, source_object)
     begun, ended = _time(build.get("startTime")), _time(build.get("finishTime"))
     duration = int((ended - begun).total_seconds()) if begun and ended else int(clock() - started)
     outcome.duration_seconds = duration
@@ -446,3 +545,94 @@ def build_commit(
     logger.info(f"Managed build {cloud_id} ended {build.get('status')}: {category}")
     return fail(category, message, detail=f"{build.get('status')}: {(build.get('failureInfo') or {}).get('detail', '')}",
                 status="timeout" if category == "build_timeout" else "failed")
+
+
+# ------------------------------------------------------------------ cleanup (hourly)
+
+def _images_unused(db: Session, build: Build) -> bool:
+    """
+    No preview runs this build's images any more: its preview is gone, or
+    has moved on to a newer commit and is Ready with it.
+    """
+    from app.models.environment import EnvironmentStatus
+
+    environment = db.get(Environment, build.environment_id) if build.environment_id else None
+    if environment is None or environment.status == EnvironmentStatus.DESTROYED:
+        return True
+    return environment.commit_sha != build.commit_sha and environment.status == EnvironmentStatus.READY
+
+
+def _slot_contents(gcp: GCPClient, slot: int) -> "tuple[List[str], List[tuple]]":
+    packages = gcp.list_packages(f"ephemera-builds-{slot}")
+    objects = [(bucket, name) for bucket in (source_bucket(), logs_bucket())
+               for name in gcp.list_objects(bucket, f"slot-{slot}/")]
+    return packages, objects
+
+
+def prune(db: Session, gcp: Optional[GCPClient] = None) -> Dict[str, Any]:
+    """
+    Delete what managed builds no longer need:
+
+    - the tags of images no preview runs (untagged images are then removed
+      by the registry's cleanup policy within a day);
+    - everything in the build slot of a repository that turned managed
+      builds off: its registry's images and its prefixes of the source and
+      logs buckets. Only an empty slot is released for another repository,
+      whose build account can read that registry and those prefixes.
+    """
+    report: Dict[str, Any] = {"tags_deleted": 0, "slots_released": [], "errors": 0}
+    if not settings.gcp_project_id:
+        return report
+    stale = [b for b in db.query(Build).filter(Build.status == "succeeded", Build.images_deleted_at.is_(None)).all()
+             if _images_unused(db, b)]
+    idle = db.query(RepositorySettings).filter(RepositorySettings.build_slot.isnot(None),
+                                               RepositorySettings.managed_builds_enabled.is_(False)).all()
+    if not stale and not idle:
+        return report  # no Google calls when there is nothing to do
+    gcp = gcp or gcp_client()
+    now = datetime.now(timezone.utc)
+
+    for build in stale:
+        try:
+            for service in build.images or {}:
+                gcp.delete_tag(f"ephemera-builds-{build.slot}", image_name(service), build.commit_sha)
+        except GCPError as e:
+            logger.warning(f"Could not delete the images of build {build.id}: {e}")
+            report["errors"] += 1
+            continue
+        build.images_deleted_at = now
+        db.commit()
+        report["tags_deleted"] += 1
+
+    since = _running_since()
+    for row in idle:
+        running = [c for (c,) in db.query(Build.created_at).filter(
+            func.lower(Build.repository_full_name) == row.repository_full_name.lower(),
+            Build.status.in_(RUNNING)).all() if c is None or _aware(c) >= since]
+        if running:
+            continue
+        slot = row.build_slot
+        try:
+            packages, objects = _slot_contents(gcp, slot)
+            if packages or objects:
+                # Package deletion finishes on Google's side; the next run
+                # confirms the slot is empty before releasing it.
+                for package in packages:
+                    gcp.delete_package(f"ephemera-builds-{slot}", package)
+                for bucket, name in objects:
+                    gcp.delete_object(bucket, name)
+                logger.info(f"Wiping build slot {slot} of {row.repository_full_name}: "
+                            f"{len(packages)} packages, {len(objects)} objects")
+                continue
+        except GCPError as e:
+            logger.warning(f"Could not wipe build slot {slot}: {e}")
+            report["errors"] += 1
+            continue
+        db.query(Build).filter(func.lower(Build.repository_full_name) == row.repository_full_name.lower(),
+                               Build.images_deleted_at.is_(None)).update({"images_deleted_at": now},
+                                                                         synchronize_session=False)
+        row.build_slot = None
+        db.commit()
+        logger.info(f"Released build slot {slot} (was {row.repository_full_name})")
+        report["slots_released"].append(slot)
+    return report

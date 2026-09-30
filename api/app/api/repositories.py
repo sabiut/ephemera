@@ -18,6 +18,7 @@ from app.database import get_db
 from app.models import Environment, RepositorySettings, User
 from app.services import build_plan, provisioning, registries, repo_access, setup_check, setup_guide
 from app.services.github import GitHubUnavailable, InstalledRepository, github_service
+from app.services import managed_builds
 from app.services.managed_builds import allowlisted as build_plan_allowlisted
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -282,6 +283,8 @@ async def get_build_plan(owner: str, repo: str, pr: Optional[int] = None, db: Se
         "managed_builds_enabled": enabled,
         # Limited beta: only allowlisted repositories can turn it on.
         "allowlisted": build_plan_allowlisted(installed.full_name),
+        # This calendar month's build minutes (UTC) and when they reset.
+        "usage": managed_builds.minutes_used(db, installed.full_name),
         "confirmed_by": row.build_plan_confirmed_by if enabled else None,
         "confirmed_at": row.build_plan_confirmed_at if enabled else None,
         "differences": build_plan.differences(row.build_plan_confirmed, plan.signature()) if enabled else [],

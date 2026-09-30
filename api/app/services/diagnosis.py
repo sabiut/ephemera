@@ -72,6 +72,10 @@ _ACTIONS: Dict[str, List[Dict[str, str]]] = {
     "variables": [CHECK],
     "bad_yaml": [CHECK],
     "capacity": [USAGE],
+    "build_fork_pending": [{"kind": "approve_build", "label": "Approve build"}],
+    "build_limit": [{"kind": "managed_builds", "label": "See build minutes"}],
+    "build_dockerfile_missing": [CHECK],
+    "build_unsupported": [{"kind": "managed_builds", "label": "See the build plan"}],
 }
 
 
@@ -102,6 +106,40 @@ def explain(error: Optional[str], repository: str = "", commit_sha: str = "",
 
     def d(category, title, explanation, action):
         return Diagnosis(category, title, explanation, action, names, links, _actions(category, error))
+
+    # Managed builds: Ephemera built (or would have built) this commit.
+    if "comes from a fork, so building commit" in error:
+        return d("build_fork_pending", "Waiting for build approval",
+                 f"This pull request comes from a fork. Its code builds with this repository's build account, so "
+                 f"someone with write access has to approve commit {short} first.",
+                 "If you can push to this repository, check the changes, then click Approve build. Every new "
+                 "push needs approving again.")
+    if "build minutes for this month" in error:
+        return d("build_limit", "Out of build minutes", error,
+                 "Wait for the reset, or have your CI build this commit's images and name them in "
+                 "docker-compose.yml with ${EPHEMERA_SHA}; those previews don't use build minutes.")
+    if error.startswith("The build ran past") or error.startswith("The build did not finish within"):
+        return d("build_timeout", "Build took too long", error,
+                 "Make the build faster (a smaller build context via .dockerignore, fewer steps, a slimmer base "
+                 "image) and push again.")
+    if error.startswith("The Dockerfile or build context for"):
+        return d("build_dockerfile_missing", "Dockerfile not found", error,
+                 "Check build: in docker-compose.yml (context, and dockerfile relative to it) against the files "
+                 "in this commit, then push a fix.")
+    if error.startswith("Building ") and " failed" in error:
+        return d("build_step_failed", "Build failed", error,
+                 "Run docker compose build locally at this commit to see the whole output, fix it, and push.")
+    if error.startswith("Managed builds can't build this commit"):
+        return d("build_unsupported", "Can't build this commit", error,
+                 "Change docker-compose.yml so the build stays inside the repository, or build this service in "
+                 "your CI.")
+    if error.startswith("Gave up after about") and "waiting to build" in error:
+        return d("build_busy", "Build queue was full", error, "Retry the preview; builds usually take a few minutes.")
+    if error.startswith(("Ephemera could not run the build", "Ephemera could not fetch this commit",
+                         "Managed builds are full")):
+        return d("build_platform", "Build couldn't run", error,
+                 "This is on Ephemera's side, not in your repository. Retry the preview; if it keeps failing, "
+                 "contact support.")
 
     image_pull = any(k in error for k in ("ImagePullBackOff", "ErrImagePull"))
     if "was never published" in error or (image_pull and any(k in lower for k in ("not found", "manifest unknown"))):

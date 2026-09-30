@@ -149,6 +149,9 @@ def _run_deployment(
             compose_text, stage=stage, superseded=lambda: _superseded_by(db, environment_id, commit_sha),
         )
 
+    if build is not None and build.wait:
+        # No room to build now: the task runs again shortly (see _locked).
+        return {"success": False, "build_wait": build.wait, "commit_sha": commit_sha}
     if build is not None and build.error:
         result = {"success": False, "compose_found": True, "error": build.error, "services": [],
                   "service_urls": {}, "build_category": build.category}
@@ -453,6 +456,8 @@ def _provision_body(
             self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha,
             deployment_id=deployment_id,
         )
+        if result.get("build_wait"):
+            return {"success": False, "environment_id": environment_id, "build_wait": result["build_wait"]}
         if result.get("superseded_by"):
             # A newer push owns this preview now; its task sets the real
             # status and comment. This commit's pending status is closed out.
@@ -639,6 +644,8 @@ def _update_body(
             self.db, environment_id, installation_id, repo_full_name, environment.namespace, commit_sha,
             deployment_id=deployment_id,
         )
+        if result.get("build_wait"):
+            return {"success": False, "environment_id": environment_id, "build_wait": result["build_wait"]}
         if result.get("superseded_by"):
             # A newer push owns this preview now; its task sets the real
             # status and comment. This commit's pending status is closed out.
@@ -803,7 +810,14 @@ def _locked(task, environment_id: int, commit_sha: Optional[str], deployment_id:
                                          commit_sha, f"superseded by {newer[:7]}")
                 logger.info(f"Skipping {commit_sha[:7]} for environment {environment_id}: {newer[:7]} is newer")
                 return {"success": False, "environment_id": environment_id, "superseded_by": newer}
-        return run()
+        outcome = run()
+        if isinstance(outcome, dict) and outcome.get("build_wait"):
+            # Managed builds had no room (the repository's own build or the
+            # platform's are running). Wait like a busy lock: nothing
+            # changed in the cluster, and the retry starts over.
+            return _reschedule(task, environment_id, commit_sha, deployment_id, "waiting to build",
+                               teardown, notify, reason=outcome["build_wait"])
+        return outcome
 
 
 def _retries_so_far(task) -> int:
@@ -811,7 +825,7 @@ def _retries_so_far(task) -> int:
 
 
 def _reschedule(task, environment_id: int, commit_sha: Optional[str], deployment_id: Optional[int],
-                state: str, teardown: bool, notify):
+                state: str, teardown: bool, notify, reason: Optional[str] = None):
     """
     Try again later when the lock is busy or Redis is unreachable. Nothing in
     the cluster has been touched. Once the retries run out the request is
@@ -825,8 +839,11 @@ def _reschedule(task, environment_id: int, commit_sha: Optional[str], deployment
                          max_retries=settings.environment_lock_max_retries)
 
     minutes = (settings.environment_lock_max_retries * settings.environment_lock_retry_seconds) // 60
-    message = (f"Gave up after about {minutes} minutes: timed out waiting for exclusive access to the "
-               f"preview (lock {state}; another deployment held it or Redis was unreachable)")
+    if reason:
+        message = f"Gave up after about {minutes} minutes waiting to build ({reason})"
+    else:
+        message = (f"Gave up after about {minutes} minutes: timed out waiting for exclusive access to the "
+                   f"preview (lock {state}; another deployment held it or Redis was unreachable)")
     logger.error(f"Environment {environment_id}: {message}")
     environment = environment_crud.get_environment(task.db, environment_id)
     if environment is None:

@@ -311,3 +311,15 @@ def expire_idle_previews(self):
     except Exception as e:
         logger.error(f"Error while expiring idle previews: {e}")
         return {"success": False, "error": str(e), "expired": expired}
+
+
+@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.cleanup.prune_managed_builds")
+def prune_managed_builds(self):
+    """Delete built images no preview runs, and wipe and release unused build slots."""
+    from app.services import managed_builds
+
+    try:
+        return {"success": True, **managed_builds.prune(self.db)}
+    except Exception as e:
+        logger.error(f"Error while pruning managed builds: {e}")
+        return {"success": False, "error": str(e)}

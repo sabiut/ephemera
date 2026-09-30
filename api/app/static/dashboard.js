@@ -623,6 +623,18 @@ async function runRecovery(envId, index) {
         if (kind === 'other') document.getElementById('regHost').value = action.registry || '';
         document.getElementById('repoRegistriesCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
         document.getElementById('regUser').focus();
+    } else if (action.kind === 'approve_build') {
+        if (!confirm(`Build commit ${(env.commit_sha || '').slice(0, 7)} of this fork's pull request? It runs with this repository's build account. Approve only code you have checked.`)) return;
+        try {
+            await apiCall(`/api/v1/environments/${env.id}/approve-build`, { method: 'POST' });
+            showToast('Approved. Building this commit now.');
+            await retryEnvironment(env.id);
+        } catch (e) {
+            showToast('Could not approve: ' + e.message, 'error');
+        }
+    } else if (action.kind === 'managed_builds') {
+        await openRepositoryView(fullName);
+        document.getElementById('repoBuildsCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } else if (action.kind === 'usage') {
         await openRepositoryView(fullName);
         document.getElementById('repoPullsCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1028,7 +1040,11 @@ function buildPlanHTML(owner, repo, p) {
     } else {
         state = `<p class="reg-help">${escapeHtml(p.message)}</p>`;
     }
-    return `<p class="reg-help" style="padding-top:16px;">Detected from docker-compose.yml on ${escapeHtml(p.ref_label)}.</p>${table}${state}`;
+    const u = p.usage;
+    const minutes = u && p.managed_builds_enabled && u.minutes_limit > 0
+        ? `<p class="reg-help"${u.minutes_used >= u.minutes_limit ? ' style="color:#f87171;"' : ''}>Build minutes this month: ${u.minutes_used} of ${u.minutes_limit} (resets ${new Date(u.resets_at).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}).</p>`
+        : '';
+    return `<p class="reg-help" style="padding-top:16px;">Detected from docker-compose.yml on ${escapeHtml(p.ref_label)}.</p>${table}${minutes}${state}`;
 }
 
 async function loadBuildPlan(owner, repo) {

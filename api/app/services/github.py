@@ -263,6 +263,23 @@ class GitHubService:
             logger.warning(f"Collaborator check for {login} on {repo_full_name} failed: {e.status} {e.data}")
             return None
 
+    def can_write(self, installation_id: int, repo_full_name: str, login: str) -> Optional[bool]:
+        """
+        Whether the login may push to the repository (write, maintain or
+        admin). None when the check could not be performed.
+        """
+        client = self.get_installation_client(installation_id)
+        if not client:
+            raise GitHubUnavailable("GitHub App integration not configured")
+        try:
+            # The classic permission: maintain reads as write, triage as read.
+            return client.get_repo(repo_full_name).get_collaborator_permission(login) in ("admin", "write")
+        except GithubException as e:
+            if e.status == 404:
+                return False
+            logger.warning(f"Permission check for {login} on {repo_full_name} failed: {e.status} {e.data}")
+            return None
+
     def post_comment_to_pr(
         self,
         installation_id: int,
