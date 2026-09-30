@@ -54,14 +54,14 @@ def check(request: Request, db: Session = Depends(get_db)):
         return Response(status_code=401)
     if not preview_access.is_protected(db, environment.repository_full_name):
         return Response(status_code=200)
-    probe = request.headers.get(preview_access.PROBE_HEADER.lower())
-    if probe and probe == preview_access.probe_value(host):
+    if preview_access.probe_valid(request.headers.get(preview_access.PROBE_HEADER.lower()), host):
         return Response(status_code=200)  # Ephemera's own readiness check
     claims = preview_access.read_cookie(request.cookies.get(preview_access.COOKIE))
     if not claims or claims.get("ns") != environment.namespace:
         return Response(status_code=401)
     user = db.query(User).filter(User.id == claims.get("uid")).first()
-    if user is None or not _may_view(db, user, environment):
+    # A disabled account loses access at once, not when its cookie expires.
+    if user is None or not user.is_active or not _may_view(db, user, environment):
         return Response(status_code=401)
     return Response(status_code=200)
 

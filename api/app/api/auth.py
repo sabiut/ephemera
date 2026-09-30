@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import SESSION_COOKIE, get_current_token, get_current_user, is_admin
@@ -94,6 +94,19 @@ async def github_callback(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication failed",
         )
+
+    if not user.is_active:
+        # Every page (and a protected preview's sign-in) would reject the
+        # session and send the browser back here: stop the loop with a reason.
+        logger.warning(f"Disabled account {user.github_login} tried to sign in")
+        response = HTMLResponse(status_code=403, content=(
+            "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Account disabled</title></head>"
+            "<body style='font-family:sans-serif;background:#0a0a0a;color:#e5e5e5;padding:40px'>"
+            "<h1>This Ephemera account is disabled</h1><p>Ask your Ephemera administrator to re-enable it.</p>"
+            "</body></html>"))
+        response.delete_cookie(STATE_COOKIE)
+        response.delete_cookie(NEXT_COOKIE)
+        return response
 
     logger.info(f"User {user.github_login} authenticated successfully")
 

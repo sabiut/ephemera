@@ -114,14 +114,24 @@ def test_the_task_applies_the_setting_and_records_it(db, user, monkeypatch):
     assert seen == [(env.namespace, True)] and env.access_applied == "protected"
 
 
-def test_the_task_leaves_the_record_alone_if_the_cluster_refused(db, user, monkeypatch):
+def test_a_refused_change_is_retried_then_shown_as_failed(db, user, monkeypatch):
+    from celery.exceptions import Retry
     env = _env(db, user, applied="public")
     db.add(RepositorySettings(repository_full_name=REPO, protect_previews=True))
     db.commit()
     monkeypatch.setattr(env_tasks.deployment_service, "apply_access", lambda ns, protected: False)
+    retried = []
+    monkeypatch.setattr(env_tasks.apply_preview_access, "retry",
+                        lambda countdown, max_retries: retried.append(countdown) or Retry())
+    with pytest.raises(Retry):
+        _run(env_tasks.apply_preview_access, environment_id=env.id)
+    db.refresh(env)
+    assert retried == [10] and env.access_applied == "public"  # untouched while retrying
+
+    monkeypatch.setattr(env_tasks, "_retries_so_far", lambda task: env_tasks.ACCESS_RETRIES)
     assert _run(env_tasks.apply_preview_access, environment_id=env.id)["success"] is False
     db.refresh(env)
-    assert env.access_applied == "public"  # still says what is really there
+    assert env.access_applied == "failed"  # visible, instead of stopping silently
 
 
 def test_removed_previews_are_skipped(db, user, monkeypatch):

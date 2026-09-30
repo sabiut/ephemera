@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, is_admin
@@ -174,23 +175,28 @@ class RepositorySettingsIO(BaseModel):
     # cluster (a change is applied to each within moments of saving).
     previews: int = 0
     previews_applied: int = 0
+    # Previews whose last change could not be applied (still on the old
+    # access); saving the setting again retries them.
+    previews_failed: int = 0
 
 
 def _settings_out(db: Session, repository_full_name: str, row) -> RepositorySettingsIO:
     protect = bool(row and row.protect_previews)
     wanted = "protected" if protect else "public"
-    live = db.query(Environment).filter(Environment.repository_full_name == repository_full_name,
+    live = db.query(Environment).filter(func.lower(Environment.repository_full_name) == repository_full_name.lower(),
                                         Environment.status.in_(provisioning.HOLDS_RESOURCES)).all()
     applied = sum(1 for e in live if (e.access_applied or "public") == wanted)
+    failed = sum(1 for e in live if e.access_applied == "failed")
     return RepositorySettingsIO(protect_previews=protect, updated_by_login=row.updated_by_login if row else None,
-                                updated_at=row.updated_at if row else None, previews=len(live), previews_applied=applied)
+                                updated_at=row.updated_at if row else None, previews=len(live),
+                                previews_applied=applied, previews_failed=failed)
 
 
 @router.get("/repositories/{owner}/{repo}/settings", response_model=RepositorySettingsIO)
 async def get_repository_settings(owner: str, repo: str, db: Session = Depends(get_db),
                                   current_user: User = Depends(get_current_user)):
     installed = _accessible_repo(owner, repo, current_user)
-    row = db.query(RepositorySettings).filter(RepositorySettings.repository_full_name == installed.full_name).first()
+    row = db.query(RepositorySettings).filter(func.lower(RepositorySettings.repository_full_name) == installed.full_name.lower()).first()
     return _settings_out(db, installed.full_name, row)
 
 
@@ -206,7 +212,7 @@ def put_repository_settings(owner: str, repo: str, body: RepositorySettingsIO, d
     from app.tasks.environment import apply_preview_access  # avoid import cycle
 
     installed = _accessible_repo(owner, repo, current_user)
-    row = db.query(RepositorySettings).filter(RepositorySettings.repository_full_name == installed.full_name).first()
+    row = db.query(RepositorySettings).filter(func.lower(RepositorySettings.repository_full_name) == installed.full_name.lower()).first()
     if row is None:
         row = RepositorySettings(repository_full_name=installed.full_name)
         db.add(row)
@@ -215,7 +221,7 @@ def put_repository_settings(owner: str, repo: str, body: RepositorySettingsIO, d
     db.commit()
     db.refresh(row)
     wanted = "protected" if row.protect_previews else "public"
-    for env in db.query(Environment).filter(Environment.repository_full_name == installed.full_name,
+    for env in db.query(Environment).filter(func.lower(Environment.repository_full_name) == installed.full_name.lower(),
                                             Environment.status.in_(provisioning.HOLDS_RESOURCES)).all():
         if (env.access_applied or "public") != wanted:
             apply_preview_access.delay(environment_id=env.id)

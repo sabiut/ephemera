@@ -70,6 +70,32 @@ def parse_port(port: Any) -> Optional[Tuple[int, int]]:
     return None
 
 
+PULL_SECRET = "ephemera-registry"  # registries.PULL_SECRET_NAME, without the import cycle
+
+
+def _references_secret(pod: Dict[str, Any], name: str) -> bool:
+    """Whether a pod spec mounts the Secret or reads it into a container's environment."""
+    for vol in pod.get("volumes") or []:
+        if not isinstance(vol, dict):
+            continue
+        if (vol.get("secret") or {}).get("secretName") == name:
+            return True
+        for src in ((vol.get("projected") or {}).get("sources") or []):
+            if isinstance(src, dict) and (src.get("secret") or {}).get("name") == name:
+                return True
+    for c in (pod.get("containers") or []) + (pod.get("initContainers") or []):
+        if not isinstance(c, dict):
+            continue
+        for env in c.get("env") or []:
+            ref = ((env or {}).get("valueFrom") or {}).get("secretKeyRef") or {}
+            if ref.get("name") == name:
+                return True
+        for src in c.get("envFrom") or []:
+            if ((src or {}).get("secretRef") or {}).get("name") == name:
+                return True
+    return False
+
+
 def harden_deployment(manifest: Dict[str, Any]) -> Optional[str]:
     """
     Apply the same pod hardening to every Deployment, whichever path wrote
@@ -89,6 +115,11 @@ def harden_deployment(manifest: Dict[str, Any]) -> Optional[str]:
     for vol in pod.get("volumes") or []:
         if isinstance(vol, dict) and vol.get("hostPath"):
             return "hostPath volumes are not allowed in previews"
+    # The registry pull Secret holds the repository's registry token; it is
+    # only for the kubelet. Mounting it, or reading it into the environment,
+    # would hand the token to the code in the pull request.
+    if _references_secret(pod, PULL_SECRET):
+        return f"the {PULL_SECRET} Secret holds registry credentials and cannot be mounted or read by a container"
     pod["automountServiceAccountToken"] = False
     for container in (pod.get("containers") or []) + (pod.get("initContainers") or []):
         if not isinstance(container, dict):
@@ -168,11 +199,20 @@ def check_readiness(
 
     paths = paths or {}
     pending = dict(urls)
-    last_reason: Dict[str, str] = {}
+    # Each service's latest answer: ("status", code) or ("error", message).
+    # Only the latest counts: a 404 followed by a 503 or a dropped connection
+    # is a failure, not "responding".
+    latest: Dict[str, Tuple[str, Any]] = {}
     readiness: Dict[str, Dict[str, Any]] = {}
-    first_4xx: Dict[str, float] = {}
+    fourxx_since: Dict[str, float] = {}  # start of an unbroken run of 4xx on "/"
     start = time.monotonic()
     deadline = start + timeout_seconds
+
+    def reason(service: str) -> str:
+        kind, value = latest.get(service, ("error", "no response"))
+        shown = paths.get(service) or "/"
+        return f"HTTP {value} at {shown}" if kind == "status" else value
+
     while pending and time.monotonic() < deadline:
         for service, url in list(pending.items()):
             path = paths.get(service)
@@ -185,32 +225,32 @@ def check_readiness(
                 response = httpx.get(target, timeout=10.0, follow_redirects=True,
                                      headers={preview_access.PROBE_HEADER: preview_access.probe_value(host)})
             except Exception as e:  # connection, TLS, DNS
-                last_reason[service] = f"{type(e).__name__}: {e}"[:200]
+                latest[service] = ("error", f"{type(e).__name__}: {e}"[:200])
+                fourxx_since.pop(service, None)
                 continue
             code = response.status_code
+            latest[service] = ("status", code)
             shown = path or "/"
             if 200 <= code < 400:
                 readiness[service] = {"path": shown, "status": code, "verified": True}
                 pending.pop(service, None)
             elif 400 <= code < 500 and not path:
                 now = time.monotonic()
-                first_4xx.setdefault(service, now)
-                if now - first_4xx[service] >= unverified_grace_seconds:
+                fourxx_since.setdefault(service, now)
+                if now - fourxx_since[service] >= unverified_grace_seconds:
                     readiness[service] = {"path": shown, "status": code, "verified": False}
                     pending.pop(service, None)
-                else:
-                    last_reason[service] = f"HTTP {code} at {shown}"
             else:
-                last_reason[service] = f"HTTP {code} at {shown}"
+                fourxx_since.pop(service, None)  # a 5xx breaks the run of 4xx
         if pending:
             time.sleep(poll_seconds)
-    # Out of time: a service that only ever gave a 4xx on "/" still responds.
+    # Out of time: a service whose latest answer is still a 4xx on "/" responds.
     for service in list(pending):
-        if service in first_4xx and not paths.get(service):
-            code = int(last_reason[service].split()[1])
-            readiness[service] = {"path": "/", "status": code, "verified": False}
+        kind, value = latest.get(service, ("error", None))
+        if not paths.get(service) and kind == "status" and 400 <= value < 500:
+            readiness[service] = {"path": "/", "status": value, "verified": False}
             pending.pop(service)
-    return {service: last_reason.get(service, "no response") for service in pending}, readiness
+    return {service: reason(service) for service in pending}, readiness
 
 
 def probe_urls(urls: Dict[str, str], timeout_seconds: int = 300, poll_seconds: float = 5.0) -> Dict[str, str]:
@@ -544,6 +584,10 @@ class DeploymentService:
         if kind in PRUNABLE_KINDS:
             metadata.setdefault("labels", {}).setdefault(MANAGED_LABEL, MANAGED_VALUE)
 
+        if kind == "Secret" and name == PULL_SECRET:
+            logger.error(f"Refused Secret/{name}: that name is reserved for the registry pull Secret")
+            return False
+
         if kind == "Deployment":
             refused = harden_deployment(manifest)
             if refused:
@@ -777,6 +821,7 @@ class DeploymentService:
                 "services": deployed_services,
                 "skipped_services": skipped,
                 "service_urls": service_urls,
+                "failed_manifests": list(failed),
                 "readiness_paths": {n: p for n, cfg in compose["services"].items()
                                     if (p := readiness_path(cfg if isinstance(cfg, dict) else {}))},
                 "images": report.images,

@@ -63,7 +63,7 @@ def _admission_lock(db: Session, repository_full_name: str) -> None:
 def repository_usage(db: Session, repository_full_name: str) -> "tuple[List[int], int]":
     """(PR numbers holding a preview, the limit; 0 means unlimited) for a repository."""
     rows = db.query(Environment.pr_number).filter(
-        Environment.repository_full_name == repository_full_name,
+        environment_crud.same_repository(Environment.repository_full_name, repository_full_name),
         Environment.status.in_(HOLDS_RESOURCES),
     ).order_by(Environment.pr_number).all()
     return [row[0] for row in rows], settings.preview_max_active_per_repository
@@ -74,7 +74,7 @@ def _check_limit(db: Session, req: "EnvironmentRequest") -> None:
     if limit <= 0:
         return
     holding = db.query(Environment.pr_number).filter(
-        Environment.repository_full_name == req.repository_full_name,
+        environment_crud.same_repository(Environment.repository_full_name, req.repository_full_name),
         Environment.pr_number != req.pr_number,
         Environment.status.in_(HOLDS_RESOURCES),
     ).order_by(Environment.pr_number).all()
