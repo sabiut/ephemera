@@ -92,8 +92,9 @@ class Settings(BaseSettings):
     # services with build:. Off until the build pipeline exists; the
     # dashboard shows the build plan only when this is on.
     managed_builds_enabled: bool = False
-    # Limited beta: only these repositories (comma-separated owner/repo,
-    # case-insensitive) may turn managed builds on.
+    # Beta: the repositories (comma-separated owner/repo, case-insensitive)
+    # that may turn managed builds on, or "*" for every repository. Places
+    # are limited by MANAGED_BUILDS_SLOTS either way.
     managed_builds_allowlist: str = ""
     # Where builds run: the project and region of modules/managed-builds.
     # Buckets, slot accounts and registries follow its naming.

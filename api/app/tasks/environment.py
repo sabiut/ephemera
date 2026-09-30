@@ -481,6 +481,25 @@ Ephemera could not build commit `{commit_sha[:7]}`, so the preview was not updat
     return "failure", _BUILD_STATUS.get(category, "Build failed"), comment
 
 
+def _record_outcome(db: Session, environment, result: Optional[Dict[str, Any]], error: Optional[Exception] = None) -> None:
+    """Metrics: each preview that became Ready (and whether every check passed) or failed, and why."""
+    from app.services import metrics
+    from app.services.diagnosis import explain
+
+    started = environment.deploy_started_at
+    if started is not None and started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    seconds = int((datetime.now(timezone.utc) - started).total_seconds()) if started else None
+    if error is None:
+        readiness = (result or {}).get("readiness") or {}
+        metrics.record(db, "preview_ready", environment.repository_full_name, environment.id,
+                       verified=bool(readiness) and all(r.get("verified") for r in readiness.values()),
+                       managed=bool(((result or {}).get("managed_build") or {}).get("services")), seconds=seconds)
+    else:
+        metrics.record(db, "preview_failed", environment.repository_full_name, environment.id,
+                       category=getattr(error, "category", None) or explain(str(error)).category, seconds=seconds)
+
+
 def _provision_body(
     self,
     environment_id: int,
@@ -551,6 +570,7 @@ def _provision_body(
                                result.get("build_category"), result.get("build_id"))
 
         environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.READY)
+        _record_outcome(self.db, environment, result)
         logger.info(f"Environment {environment_id} provisioned successfully")
 
         env_url = result.get("primary_url") or environment.environment_url
@@ -578,6 +598,7 @@ Your preview environment has been created!
         environment_crud.update_environment_status(
             self.db, environment, EnvironmentStatus.FAILED, error_message=str(e)
         )
+        _record_outcome(self.db, environment, None, e)
         notice = _build_notice(self.db, e, environment_id, commit_sha) if isinstance(e, DeployFailed) else None
         if notice:
             _notify(installation_id, repo_full_name, pr_number, commit_sha, notice[0], notice[1], notice[2],
@@ -744,6 +765,7 @@ def _update_body(
                                result.get("build_category"), result.get("build_id"))
 
         environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.READY)
+        _record_outcome(self.db, environment, result)
         logger.info(f"Environment {environment_id} redeployed at {commit_sha[:8]}")
 
         env_url = result.get("primary_url") or environment.environment_url
@@ -771,6 +793,7 @@ Redeployed at `{commit_sha[:8]}`.
         environment_crud.update_environment_status(
             self.db, environment, EnvironmentStatus.FAILED, error_message=str(e)
         )
+        _record_outcome(self.db, environment, None, e)
         notice = _build_notice(self.db, e, environment_id, commit_sha) if isinstance(e, DeployFailed) else None
         if notice:
             _notify(installation_id, repo_full_name, pr_number, commit_sha, notice[0], notice[1], notice[2],
