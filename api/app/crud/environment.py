@@ -175,6 +175,13 @@ def set_stage(db: Session, environment_id: int, stage: str, detail: Optional[str
     db.commit()
 
 
+def set_access_applied(db: Session, environment_id: int, access: str) -> None:
+    environment = get_environment(db, environment_id)
+    if environment is not None:
+        environment.access_applied = access
+        db.commit()
+
+
 def update_environment_status(
     db: Session,
     environment: Environment,

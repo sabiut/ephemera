@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user, is_admin
 from app.crud import environment as environment_crud
 from app.database import get_db
-from app.models import RepositorySettings, User
+from app.models import Environment, RepositorySettings, User
 from app.services import provisioning, registries, repo_access, setup_check, setup_guide
 from app.services.github import GitHubUnavailable, InstalledRepository, github_service
 
@@ -170,6 +170,20 @@ class RepositorySettingsIO(BaseModel):
     protect_previews: bool
     updated_by_login: Optional[str] = None
     updated_at: Optional[datetime] = None
+    # Running previews, and how many already have the chosen access in the
+    # cluster (a change is applied to each within moments of saving).
+    previews: int = 0
+    previews_applied: int = 0
+
+
+def _settings_out(db: Session, repository_full_name: str, row) -> RepositorySettingsIO:
+    protect = bool(row and row.protect_previews)
+    wanted = "protected" if protect else "public"
+    live = db.query(Environment).filter(Environment.repository_full_name == repository_full_name,
+                                        Environment.status.in_(provisioning.HOLDS_RESOURCES)).all()
+    applied = sum(1 for e in live if (e.access_applied or "public") == wanted)
+    return RepositorySettingsIO(protect_previews=protect, updated_by_login=row.updated_by_login if row else None,
+                                updated_at=row.updated_at if row else None, previews=len(live), previews_applied=applied)
 
 
 @router.get("/repositories/{owner}/{repo}/settings", response_model=RepositorySettingsIO)
@@ -177,10 +191,7 @@ async def get_repository_settings(owner: str, repo: str, db: Session = Depends(g
                                   current_user: User = Depends(get_current_user)):
     installed = _accessible_repo(owner, repo, current_user)
     row = db.query(RepositorySettings).filter(RepositorySettings.repository_full_name == installed.full_name).first()
-    if row is None:
-        return RepositorySettingsIO(protect_previews=False)
-    return RepositorySettingsIO(protect_previews=row.protect_previews, updated_by_login=row.updated_by_login,
-                                updated_at=row.updated_at)
+    return _settings_out(db, installed.full_name, row)
 
 
 @router.put("/repositories/{owner}/{repo}/settings", response_model=RepositorySettingsIO)
@@ -188,9 +199,12 @@ def put_repository_settings(owner: str, repo: str, body: RepositorySettingsIO, d
                             current_user: User = Depends(get_current_user)):
     """
     protect_previews: only the PR author, the repository's collaborators and
-    admins can open its previews, after signing in with GitHub. Applies to
-    each preview from its next deploy.
+    admins can open its previews, after signing in with GitHub. Running
+    previews are changed straight away (one job per preview, under its
+    lock); previews_applied reports how many are done.
     """
+    from app.tasks.environment import apply_preview_access  # avoid import cycle
+
     installed = _accessible_repo(owner, repo, current_user)
     row = db.query(RepositorySettings).filter(RepositorySettings.repository_full_name == installed.full_name).first()
     if row is None:
@@ -200,8 +214,12 @@ def put_repository_settings(owner: str, repo: str, body: RepositorySettingsIO, d
     row.updated_by_login = current_user.github_login
     db.commit()
     db.refresh(row)
-    return RepositorySettingsIO(protect_previews=row.protect_previews, updated_by_login=row.updated_by_login,
-                                updated_at=row.updated_at)
+    wanted = "protected" if row.protect_previews else "public"
+    for env in db.query(Environment).filter(Environment.repository_full_name == installed.full_name,
+                                            Environment.status.in_(provisioning.HOLDS_RESOURCES)).all():
+        if (env.access_applied or "public") != wanted:
+            apply_preview_access.delay(environment_id=env.id)
+    return _settings_out(db, installed.full_name, row)
 
 
 class UsageResponse(BaseModel):

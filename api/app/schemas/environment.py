@@ -58,6 +58,7 @@ class EnvironmentResponse(BaseModel):
     destroyed_at: Optional[datetime]
     removal_reason: Optional[str] = None
     kept_at: Optional[datetime] = None
+    access_applied: Optional[str] = None
     stage: Optional[str] = None
     stage_detail: Optional[str] = None
     stage_started_at: Optional[datetime] = None
