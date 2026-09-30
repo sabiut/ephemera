@@ -753,10 +753,17 @@ class DeploymentService:
         installation_id: int,
         repo_full_name: str,
         namespace: str,
-        ref: str = "HEAD"
+        ref: str = "HEAD",
+        built_images: Optional[Dict[str, str]] = None,
+        compose_content: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Deploy an application to a namespace from its docker-compose.yml.
+
+        ``built_images`` ({service: image}) are the images managed builds
+        produced for this commit; those services run them instead of their
+        build: section. ``compose_content`` is the compose file already
+        fetched at ``ref``, if the caller has it.
 
         Returns a dict with: success, compose_found, services, service_urls,
         applied_count, error.
@@ -765,7 +772,8 @@ class DeploymentService:
             app_name = repo_full_name.split("/")[-1].lower().replace("_", "-")
 
             logger.info(f"Fetching docker-compose.yml from {repo_full_name}@{ref}")
-            compose_content = self.fetch_docker_compose(installation_id, repo_full_name, ref)
+            if compose_content is None:
+                compose_content = self.fetch_docker_compose(installation_id, repo_full_name, ref)
             if not compose_content:
                 return {
                     "success": False,
@@ -794,6 +802,9 @@ class DeploymentService:
                     "service_urls": {},
                 }
 
+            for service, image in (built_images or {}).items():
+                if isinstance(compose["services"].get(service), dict):
+                    compose["services"][service]["image"] = image
             blocker = build_only_blocker(compose)
             if blocker:
                 return {

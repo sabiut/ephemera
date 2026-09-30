@@ -42,8 +42,10 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=30 * 60,  # 30 minutes
-    task_soft_time_limit=25 * 60,  # 25 minutes
+    # A deploy may include a managed build (up to 15 minutes) before it
+    # applies and checks the preview; ENVIRONMENT_LOCK_SECONDS follows these.
+    task_time_limit=45 * 60,
+    task_soft_time_limit=40 * 60,
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=1000,
     task_acks_late=True,

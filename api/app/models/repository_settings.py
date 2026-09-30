@@ -21,5 +21,8 @@ class RepositorySettings(Base):
     build_plan_confirmed = Column(JSON, nullable=True)
     build_plan_confirmed_by = Column(String, nullable=True)
     build_plan_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    # The build slot (service account and registry, created by Terraform)
+    # this repository builds as; assigned on its first build, never shared.
+    build_slot = Column(Integer, unique=True, nullable=True)
     updated_by_login = Column(String, nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

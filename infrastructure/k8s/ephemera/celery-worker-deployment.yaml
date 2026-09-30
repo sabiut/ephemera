@@ -1,3 +1,14 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ephemera-worker
+  namespace: ephemera-system
+  annotations:
+    # modules/managed-builds: may start and cancel builds as the build slot
+    # accounts, and use the build buckets and slot registries. Nothing else:
+    # no IAM administration, no cluster, no Secret Manager.
+    iam.gke.io/gcp-service-account: ephemera-builds-controller@ephemera-dev-2025.iam.gserviceaccount.com
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,7 +29,10 @@ spec:
         app: ephemera
         component: celery-worker
     spec:
-      serviceAccountName: ephemera-api
+      # Its own identity: the worker starts managed builds as
+      # ephemera-builds-controller (Workload Identity, below). The API and
+      # beat keep ephemera-api, which has no Google identity.
+      serviceAccountName: ephemera-worker
       containers:
       - name: celery-worker
         image: us-central1-docker.pkg.dev/ephemera-dev-2025/ephemera/ephemera-celery-worker:latest
@@ -43,6 +57,21 @@ spec:
             configMapKeyRef:
               name: ephemera-config
               key: BASE_DOMAIN
+        - name: MANAGED_BUILDS_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: MANAGED_BUILDS_ENABLED
+        - name: MANAGED_BUILDS_ALLOWLIST
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: MANAGED_BUILDS_ALLOWLIST
+        - name: GCP_PROJECT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: GCP_PROJECT_ID
         - name: KUBECONFIG_PATH
           valueFrom:
             configMapKeyRef:

@@ -27,7 +27,7 @@ from app.services.deployment import deployment_service
 from app.services.github import github_service
 from app.services.kubernetes import kubernetes_service
 from app.services.deployment import check_readiness, choose_primary_url
-from app.services import preview_access, registries
+from app.services import managed_builds, preview_access, registries
 
 logger = logging.getLogger(__name__)
 
@@ -139,13 +139,38 @@ def _run_deployment(
     protected = preview_access.is_protected(db, repo_full_name)
     deployment_service.set_protection(namespace, protected)
 
-    stage("deploying", "Reading docker-compose.yml and applying the services")
-    result = _active_deployment_service().deploy_application(
-        installation_id=installation_id,
-        repo_full_name=repo_full_name,
-        namespace=namespace,
-        ref=commit_sha,
-    )
+    build = None
+    if managed_builds.active_settings(db, repo_full_name) is not None:
+        # Ephemera builds this repository's build-only services from the
+        # commit first; the deploy then runs the images it pushed.
+        compose_text = deployment_service.fetch_docker_compose(installation_id, repo_full_name, commit_sha)
+        build = managed_builds.build_commit(
+            db, environment_crud.get_environment(db, environment_id), installation_id, repo_full_name, commit_sha,
+            compose_text, stage=stage, superseded=lambda: _superseded_by(db, environment_id, commit_sha),
+        )
+
+    if build is not None and build.error:
+        result = {"success": False, "compose_found": True, "error": build.error, "services": [],
+                  "service_urls": {}, "build_category": build.category}
+    else:
+        stage("deploying", "Reading docker-compose.yml and applying the services")
+        if build is not None:
+            # The compose converter, not the AI planner: the built images are
+            # already decided and must be used exactly.
+            result = deployment_service.deploy_application(
+                installation_id=installation_id, repo_full_name=repo_full_name, namespace=namespace,
+                ref=commit_sha, built_images=build.images, compose_content=compose_text,
+            )
+        else:
+            result = _active_deployment_service().deploy_application(
+                installation_id=installation_id,
+                repo_full_name=repo_full_name,
+                namespace=namespace,
+                ref=commit_sha,
+            )
+    if build is not None:
+        result["managed_build"] = {"services": sorted(build.images), "duration_seconds": build.duration_seconds,
+                                   "notes": build.notes, "build_id": build.build_id}
 
     if result.get("applied_count"):
         # Only claim the access setting is in effect if every route applied:
@@ -307,6 +332,14 @@ def _deployment_summary(result: Dict[str, Any]) -> str:
         for service in services:
             lines.append(f"- **{service}**: {urls[service]}" if service in urls else f"- {service}")
         lines.append("")
+
+    built = result.get("managed_build") or {}
+    if built.get("services"):
+        took = built.get("duration_seconds")
+        lines.append(f"**Built by Ephemera** from this commit: {', '.join(f'`{n}`' for n in built['services'])}"
+                     + (f" ({took // 60}m {took % 60:02d}s)" if took else ""))
+    for note in built.get("notes") or []:
+        lines.append(f"\n> **Build plan changed**: {note}\n")
 
     lines += _readiness_lines(result)
 
