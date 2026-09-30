@@ -67,6 +67,12 @@ celery_app.conf.update(
             "task": "app.tasks.cleanup.expire_idle_previews",
             "schedule": 3600.0,  # hourly
         },
+        # Managed builds: delete images no preview runs; wipe and release
+        # build slots of repositories that turned managed builds off.
+        "prune-managed-builds": {
+            "task": "app.tasks.cleanup.prune_managed_builds",
+            "schedule": 3600.0,  # hourly
+        },
         # Drop records of previews destroyed more than a week ago.
         "delete-old-destroyed-environments": {
             "task": "app.tasks.cleanup.cleanup_old_environments",

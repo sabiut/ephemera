@@ -106,6 +106,13 @@ class Settings(BaseSettings):
     managed_builds_poll_seconds: int = 10
     # The commit's source, compressed, as GitHub serves it.
     managed_builds_max_source_mb: int = 200
+    # Limits (docs/managed-builds.md): builds running at once per
+    # repository and platform-wide (a deploy that finds no room waits and
+    # tries again), and build minutes per repository per calendar month
+    # (UTC; each build counts whole minutes, rounded up).
+    managed_builds_max_per_repository: int = 1
+    managed_builds_max_running: int = 4
+    managed_builds_monthly_minutes: int = 300
 
     # Preview namespace quotas
     preview_cpu_quota: str = "1"

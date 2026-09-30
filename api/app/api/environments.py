@@ -143,6 +143,37 @@ def preview_access_link(
     return {"links": links, "expires_in": preview_access.CODE_TTL}
 
 
+@router.post("/{environment_id}/approve-build")
+def approve_build(
+    environment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Approve building the preview's current commit when its pull request
+    comes from a fork (managed builds). Fork code builds as the repository's
+    build account, which can push its images, so only people who can push
+    to the repository themselves (write access) or admins may approve, and
+    each commit is approved separately. Then retry the preview to build it.
+    """
+    from app.services import managed_builds
+
+    environment = _visible_or_404(db, current_user, environment_id)
+    repo = environment.repository_full_name
+    if not is_admin(current_user):
+        try:
+            allowed = github_service.can_write(environment.installation_id, repo, current_user.github_login)
+        except GitHubUnavailable:
+            raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
+        if allowed is None:
+            raise HTTPException(status_code=503, detail="Could not check your access to the repository on GitHub; try again")
+        if not allowed:
+            raise HTTPException(status_code=403, detail=f"Approving builds needs write access to {repo}")
+    record = managed_builds.approve(db, repo, environment.pr_number, environment.commit_sha, current_user.github_login)
+    logger.info(f"{current_user.github_login} approved building {repo}#{environment.pr_number} at {environment.commit_sha[:7]}")
+    return {"commit_sha": record.commit_sha, "approved_by": record.approved_by_login, "approved_at": record.approved_at}
+
+
 @router.get("/{environment_id}/deployments", response_model=List[DeploymentResponse])
 async def list_environment_deployments(
     environment_id: int,

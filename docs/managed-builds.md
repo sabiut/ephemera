@@ -1,6 +1,6 @@
 # Managed builds: design
 
-Status: design agreed (decisions below). Steps 1 (infrastructure), 2 (detection and confirmation) and 3 (the build pipeline, for allowlisted repositories) are merged. Limits (step 4) come before anyone outside the allowlist.
+Status: design agreed (decisions below). Steps 1 (infrastructure), 2 (detection and confirmation), 3 (the build pipeline, for allowlisted repositories) and 4 (limits) are merged. Next: the experience (step 5).
 
 ## Why
 
@@ -125,6 +125,14 @@ The beta succeeds if most new users reach a working preview without help and fas
    - The worker runs as its own Kubernetes service account, `ephemera-worker`, bound by Workload Identity to `ephemera-builds-controller`. The API and beat keep `ephemera-api`, which has no Google identity. Celery's limits are 40 and 45 minutes, and the environment lock 46 minutes, so a build plus a deploy fits.
    - **Turning it on**: after an infra run has created the module's resources, set `MANAGED_BUILDS_ENABLED: "true"` and `MANAGED_BUILDS_ALLOWLIST: "owner/repo,…"` in `infrastructure/k8s/ephemera/configmap.yaml`, deploy, then enable managed builds on the repository's page.
 4. **Limits**: cancellation, per-repository and platform caps, monthly minutes, image cleanup, fork approval.
+   - **Cancellation** (from step 3): a newer commit cancels the running build; so does a build still unfinished 3 minutes past its timeout.
+   - **Capacity**: 1 build per repository and 4 platform-wide (`MANAGED_BUILDS_MAX_PER_REPOSITORY`, `MANAGED_BUILDS_MAX_RUNNING`). The check and the new build's record are made under one advisory lock. A deploy that finds no room shows "Waiting to build: …" and is rescheduled the same way as a busy preview lock, so no worker is held. It fails with the reason after about an hour. A build recorded as running for longer than its timeout plus 8 minutes (a crashed worker) no longer counts.
+   - **Monthly minutes**: 300 per repository per calendar month, UTC (`MANAGED_BUILDS_MONTHLY_MINUTES`). Each build counts its billed time rounded up to whole minutes. At the limit the preview fails with `build_limit`, the reset date and the CI-image alternative. The Repositories page shows "Build minutes this month: N of 300". Build records outlive their preview's record (`ON DELETE SET NULL`), so deleting old previews does not give minutes back.
+   - **Forks**: a fork's commit is built only after someone with write access to the repository (or an admin) clicks **Approve build** in the preview's details (`POST /api/v1/environments/{id}/approve-build`, `build_approvals`). The button approves that commit and retries the preview; a new push needs approving again.
+   - **Cleanup**: the commit's source is deleted from the source bucket once the build has it. Every hour, `prune_managed_builds`:
+     - deletes the image tags no preview runs (its preview is gone, or is Ready on a newer commit); the registry's policy removes untagged images within a day;
+     - wipes the slot of a repository that turned managed builds off (the registry's packages, and its prefixes of the source and logs buckets) and releases it only once a later run finds it empty, so the next repository's build account can never read what the previous one left. The controller therefore has `storage.objectAdmin` on the logs bucket. Turning managed builds off also removes the images of that repository's running previews; they keep running until their pods restart.
+   - **Diagnoses** for build failures, with buttons: Approve build (fork), See build minutes (limit), Check this PR's configuration (missing Dockerfile).
 5. **Experience**: Building stage, PR status and comment, build diagnoses with actions, log view; extend the end-to-end test with a managed-build variant.
 6. **Beta**: open to new installations, with the metrics page.
 

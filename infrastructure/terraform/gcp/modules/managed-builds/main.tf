@@ -89,9 +89,11 @@ resource "google_storage_bucket_iam_member" "controller_source" {
   member = "serviceAccount:${google_service_account.controller.email}"
 }
 
+# Reads build logs, and deletes a slot's logs before the slot is given to
+# another repository (whose build account could otherwise read them).
 resource "google_storage_bucket_iam_member" "controller_logs" {
   bucket = google_storage_bucket.logs.name
-  role   = "roles/storage.objectViewer"
+  role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.controller.email}"
 }
 
