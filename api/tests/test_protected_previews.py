@@ -267,3 +267,36 @@ def test_collaborators_switch_protection_per_repository(client, auth_headers, mo
     assert client.put("/api/v1/repositories/other/secret/settings", headers=auth_headers,
                       json={"protect_previews": True}).status_code == 404
     repo_access.clear_cache()
+
+
+
+# ------------------------------------------------------------------ sign-in links for automation
+
+def test_an_access_link_signs_a_tool_in_through_the_real_callback(client, env, protected, auth_headers, db_session):
+    env.service_urls = {"web": f"https://{HOST}"}
+    db_session.commit()
+    r = client.post(f"/api/v1/environments/{env.id}/access-link", headers=auth_headers)
+    assert r.status_code == 200 and r.json()["expires_in"] == preview_access.CODE_TTL
+    link = urlparse(r.json()["links"]["web"])
+    assert link.netloc == HOST and link.path == preview_access.CALLBACK_PATH
+    client.cookies.clear()
+    cb = client.get(f"{link.path}?{link.query}", headers={"Host": HOST}, follow_redirects=False)
+    assert cb.status_code == 303 and cb.headers["location"] == "/"
+    cookie = cb.headers["set-cookie"].split(";", 1)[0].split("=", 1)[1]
+    assert preview_access.read_cookie(cookie)["ns"] == NS
+    client.cookies.set(preview_access.COOKIE, cookie)
+    assert client.get("/preview-auth/check", headers={"X-Original-URL": f"https://{HOST}/"}).status_code == 200
+    client.cookies.clear()
+
+
+def test_access_links_only_for_people_who_can_see_the_preview(client, env, protected, auth_headers, db_session):
+    env.owner_id = 12345  # someone else's PR, and no repository access
+    env.service_urls = {"web": f"https://{HOST}"}
+    db_session.commit()
+    assert client.post(f"/api/v1/environments/{env.id}/access-link", headers=auth_headers).status_code == 404
+
+
+def test_no_access_link_for_a_removed_preview(client, env, auth_headers, db_session):
+    env.status = EnvironmentStatus.DESTROYED
+    db_session.commit()
+    assert client.post(f"/api/v1/environments/{env.id}/access-link", headers=auth_headers).status_code == 409
