@@ -96,3 +96,40 @@ def test_deployment_history_is_listed_newest_first(client, auth_headers, db_sess
 
 def test_deployment_history_of_an_invisible_environment_is_404(client, auth_headers):
     assert client.get("/api/v1/environments/999/deployments", headers=auth_headers).status_code == 404
+
+
+# ------------------------------------------------------------------ recovery actions
+
+def _kinds(error):
+    return [a["kind"] for a in explain(error, REPO, SHA, 30).actions]
+
+
+@pytest.mark.parametrize("error,kinds", [
+    ("Nothing to preview: `api` has `build:` but no `image:`.", ["setup_guide"]),
+    ("Services did not become ready: web (image x was never published; check CI)", ["setup_guide"]),
+    ("Services did not become ready: web (CrashLoopBackOff: container keeps crashing (last exit code 1))", ["setup_check"]),
+    ("Preview URLs did not answer: web (HTTP 404 at /health)", ["setup_check"]),
+    ("docker-compose.yml requires variables that are not set: DB_URL", ["setup_check"]),
+    ("Services did not become ready: web (Unschedulable: 0/2 nodes are available: 2 Insufficient cpu.)", ["usage"]),
+    ("Failed to create Kubernetes namespace", []),  # retry is all there is
+])
+def test_each_failure_offers_the_way_to_its_fix(error, kinds):
+    assert _kinds(error) == kinds
+
+
+@pytest.mark.parametrize("image,registry", [
+    ("ghcr.io/acme/web:abc", "ghcr.io"),
+    ("us-docker.pkg.dev/p/r/web:abc", "us-docker.pkg.dev"),
+    ("docker.io/acme/web:abc", "docker.io"),
+])
+def test_a_private_image_offers_a_token_for_its_own_registry(image, registry):
+    error = (f'Services did not become ready: web (ErrImagePull: failed to pull and unpack image "{image}": '
+             "failed to authorize: 401 Unauthorized (access denied))")
+    action = explain(error, REPO, SHA, 30).actions[0]
+    assert action == {"kind": "registry", "label": f"Add a {registry} token", "registry": registry}
+
+
+def test_actions_reach_the_dashboard(client, auth_headers, db_session, user):
+    _env(db_session, user, EnvironmentStatus.FAILED, "Nothing to preview: `api` has `build:` but no `image:`.")
+    body = client.get("/api/v1/environments/", headers=auth_headers).json()
+    assert body[0]["diagnosis"]["actions"] == [{"kind": "setup_guide", "label": "Set up image builds"}]

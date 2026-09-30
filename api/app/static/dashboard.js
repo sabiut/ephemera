@@ -498,7 +498,9 @@ function renderEnvironmentDetail() {
     let main = '';
     if (status === 'failed') {
         const d = env.diagnosis || { title: 'Preview failed', explanation: '', action: '', links: [] };
-        const links = (d.links || []).map(l =>
+        const actions = (d.actions || []).map((a, i) =>
+            `<button class="btn btn-primary btn-sm" onclick="runRecovery(${env.id}, ${i})">${escapeHtml(a.label)}</button>`).join('');
+        const links = actions + (d.links || []).map(l =>
             `<a class="btn btn-ghost btn-sm" href="${escapeHtml(l.url)}" target="_blank">${escapeHtml(l.label)}</a>`).join('');
         main = `<div class="diagnosis">
             <div class="diagnosis-title">${escapeHtml(d.title)}</div>
@@ -579,6 +581,44 @@ async function keepEnvironment(id, button) {
     } catch (e) {
         showToast('Could not keep it available: ' + e.message, 'error');
         if (button) { button.disabled = false; button.textContent = 'Keep available'; }
+    }
+}
+
+// Recovery buttons: open the place where a failure is fixed, for this
+// preview's repository and pull request.
+async function openRepositoryView(fullName) {
+    closeEnvironmentDetail();
+    if (window.location.hash !== '#repositories') {
+        window.location.hash = 'repositories';
+        await new Promise(r => setTimeout(r, 0));
+    }
+    await selectRepository(fullName);
+}
+
+async function runRecovery(envId, index) {
+    const env = cachedEnvironments.find(e => e.id === envId);
+    const action = env && env.diagnosis && (env.diagnosis.actions || [])[index];
+    if (!action) return;
+    const fullName = env.repository_full_name;
+    const [owner, repo] = fullName.split('/');
+    if (action.kind === 'setup_guide') {
+        closeEnvironmentDetail();
+        await openSetupGuide(owner, repo, env.pr_number);
+    } else if (action.kind === 'setup_check') {
+        await openRepositoryView(fullName);
+        await checkPull(fullName, env.pr_number);
+    } else if (action.kind === 'registry') {
+        await openRepositoryView(fullName);
+        await loadRegistries(owner, repo);
+        const kind = ['ghcr.io', 'docker.io'].includes(action.registry) ? action.registry : 'other';
+        document.getElementById('regKind').value = kind;
+        registryKindChanged();
+        if (kind === 'other') document.getElementById('regHost').value = action.registry || '';
+        document.getElementById('repoRegistriesCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('regUser').focus();
+    } else if (action.kind === 'usage') {
+        await openRepositoryView(fullName);
+        document.getElementById('repoPullsCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }
 
