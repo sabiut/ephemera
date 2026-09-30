@@ -1,6 +1,6 @@
 # Managed builds: design
 
-Status: design agreed (decisions below). Steps 1 (infrastructure), 2 (detection and confirmation), 3 (the build pipeline, for allowlisted repositories), 4 (limits) and 5 (the experience) are merged. Next: the beta (step 6), after a live run of the end-to-end test with --managed-build.
+Status: design agreed (decisions below). In beta: steps 1 to 6 are merged. The end-to-end test passed live with --managed-build on 2026-10-01 (the build of `web` took 36 s, Ready at 101 s), after one fix found by that run (per-slot buckets, below).
 
 ## Why
 
@@ -140,6 +140,13 @@ The beta succeeds if most new users reach a working preview without help and fas
    - **Moving off CI images**: a repository whose services are built by its CI today (`image:` with `${EPHEMERA_SHA}`) can turn managed builds on. It then removes those `image:` lines (passing the commit as a build arg if the app shows it), and from then on Ephemera builds those services; the CI workflow and registry token can go.
    - **End-to-end**: `scripts/e2e/first_preview.py --managed-build` (the workflow's `managed_build` input) does exactly that in its pull request on the test app. It checks that each commit was built by Ephemera into the slot registry and that the preview serves it. It needs managed builds on for the repository first.
 6. **Beta**: open to new installations, with the metrics page.
+   - **Open**: `MANAGED_BUILDS_ALLOWLIST: "*"` lets every repository turn managed builds on. A place is its build slot, reserved when it enables them (`PUT .../build-plan`); when all `MANAGED_BUILDS_SLOTS` (10) are taken, enabling says the beta is full, and previews keep using CI images. Turning managed builds off frees the place after the hourly wipe. The limits (step 4) apply to everyone.
+   - **Measured**: events are recorded as they happen: `installed` (installation webhooks, per repository), `preview_ready` (verified or not, managed or CI, seconds since the deploy started), `preview_failed` (diagnosis category), `retry`, `setup_check_failed` and `build_wait`. Each build also records its time queued for a machine.
+   - **The admin Metrics page** (`GET /api/v1/admin/metrics`, admins only, 404 otherwise) shows:
+     - installation to first **verified** Ready preview, median and 90th percentile, managed builds versus CI images;
+     - the share of first previews that needed help before they worked, and why (a failed preview, a retry, a failed setup check);
+     - for the last 30 days: build outcomes by category, build time and time queued, build minutes per repository, deploys that waited to build, and slots in use.
+     Only events from this release on are counted; repositories installed earlier have no installation time.
 
 Each step is one or more PRs; this is several weeks of work, not a single change.
 

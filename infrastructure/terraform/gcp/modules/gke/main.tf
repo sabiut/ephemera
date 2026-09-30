@@ -97,6 +97,13 @@ resource "google_container_node_pool" "primary" {
     max_node_count = var.node_max_count
   }
 
+  # The autoscaler owns the node count. Without this every infra run set it
+  # back to node_min_count, draining the nodes the autoscaler had added.
+  # (Moving to initial_node_count instead would replace the node pool.)
+  lifecycle {
+    ignore_changes = [node_count]
+  }
+
   # Node configuration
   node_config {
     preemptible  = var.use_preemptible

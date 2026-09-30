@@ -110,7 +110,14 @@ def image_for(slot: int, service: str, commit_sha: str) -> str:
 # ------------------------------------------------------------------ who builds
 
 def allowlisted(repository_full_name: str) -> bool:
-    return (repository_full_name or "").lower() in settings.managed_builds_repositories
+    """In the beta: every repository ("*" in MANAGED_BUILDS_ALLOWLIST) or the ones listed."""
+    allowed = settings.managed_builds_repositories
+    return "*" in allowed or (repository_full_name or "").lower() in allowed
+
+
+def slots_free(db: Session) -> int:
+    used = db.query(RepositorySettings).filter(RepositorySettings.build_slot.isnot(None)).count()
+    return max(0, settings.managed_builds_slots - used)
 
 
 def active_settings(db: Session, repository_full_name: str) -> Optional[RepositorySettings]:
@@ -131,7 +138,7 @@ def assign_slot(db: Session, row: RepositorySettings) -> Optional[int]:
     used = {s for (s,) in db.query(RepositorySettings.build_slot).filter(RepositorySettings.build_slot.isnot(None))}
     free = next((i for i in range(settings.managed_builds_slots) if i not in used), None)
     if free is None:
-        db.rollback()
+        db.commit()  # nothing changed; ends the transaction and its lock
         return None
     row.build_slot = free
     db.commit()
@@ -469,6 +476,8 @@ def build_commit(
         db.rollback()
         outcome.wait = busy
         stage("building", f"Waiting to build: {busy}")
+        from app.services import metrics
+        metrics.record(db, "build_wait", repository_full_name, environment.id, reason=busy)
         return outcome
     record = Build(environment_id=environment.id, repository_full_name=repository_full_name,
                    pr_number=environment.pr_number, commit_sha=commit_sha, slot=slot, status="queued",
@@ -547,6 +556,9 @@ def build_commit(
     begun, ended = _time(build.get("startTime")), _time(build.get("finishTime"))
     duration = int((ended - begun).total_seconds()) if begun and ended else int(clock() - started)
     outcome.duration_seconds = duration
+    created = _time(build.get("createTime"))
+    if created and begun:
+        record.queued_seconds = max(0, int((begun - created).total_seconds()))
     try:
         log = (gcp.download(logs_bucket(slot), record.log_object) or b"").decode("utf-8", "replace")
     except GCPError as e:

@@ -84,7 +84,7 @@ def _resolve_ref(installed: InstalledRepository, pr: Optional[int]):
 
 
 @router.get("/repositories/{owner}/{repo}/check")
-async def check_repository(owner: str, repo: str, pr: Optional[int] = None,
+async def check_repository(owner: str, repo: str, pr: Optional[int] = None, db: Session = Depends(get_db),
                            current_user: User = Depends(get_current_user)):
     """
     Check the repository's compose file: on the default branch, or with
@@ -95,6 +95,10 @@ async def check_repository(owner: str, repo: str, pr: Optional[int] = None,
     ref, label = _resolve_ref(installed, pr)
     report = setup_check.check_repository(installed, ref=ref)
     body = report.as_dict()
+    errors = [c.get("title") for c in body.get("checks", []) if c.get("level") == "error"]
+    if errors:
+        from app.services import metrics
+        metrics.record(db, "setup_check_failed", installed.full_name, errors=errors[:10])
     body["ref_label"] = label or report.ref
     body["pr_number"] = pr
     return body
@@ -285,6 +289,9 @@ async def get_build_plan(owner: str, repo: str, pr: Optional[int] = None, db: Se
         "allowlisted": build_plan_allowlisted(installed.full_name),
         # This calendar month's build minutes (UTC) and when they reset.
         "usage": managed_builds.minutes_used(db, installed.full_name),
+        # Beta places: one build slot per repository while any is free.
+        "has_slot": bool(row and row.build_slot is not None),
+        "slots_free": managed_builds.slots_free(db),
         "confirmed_by": row.build_plan_confirmed_by if enabled else None,
         "confirmed_at": row.build_plan_confirmed_at if enabled else None,
         "differences": build_plan.differences(row.build_plan_confirmed, plan.signature()) if enabled else [],
@@ -324,6 +331,12 @@ def put_build_plan(owner: str, repo: str, body: BuildPlanChange, db: Session = D
         if body.signature is not None and body.signature != plan.signature():
             raise HTTPException(status_code=409, detail="The build plan changed since it was shown. Review it and "
                                                         "confirm again.")
+        # Reserve the repository's beta place (its build slot) now, so a
+        # full beta says so here rather than on the first pull request.
+        if managed_builds.assign_slot(db, row) is None:
+            raise HTTPException(status_code=409, detail="The managed builds beta is full: every build slot is "
+                                                        "taken. Previews keep working with images built by your "
+                                                        "CI; try again later.")
         row.managed_builds_enabled = True
         row.build_plan_confirmed = plan.signature()
         row.build_plan_confirmed_by = current_user.github_login

@@ -237,6 +237,29 @@ PR_HANDLERS = {
 }
 
 
+def _record_installed(event: str, payload: dict) -> None:
+    """Metrics: when each repository got the App (the start of its first-preview journey)."""
+    action = payload.get("action")
+    if (event, action) == ("installation", "created"):
+        repositories = payload.get("repositories") or []
+    elif (event, action) == ("installation_repositories", "added"):
+        repositories = payload.get("repositories_added") or []
+    else:
+        return
+    if not repositories:
+        return
+    from app.database import SessionLocal
+    from app.services import metrics
+
+    db = SessionLocal()
+    try:
+        for repo in repositories:
+            if repo.get("full_name"):
+                metrics.record(db, "installed", repo["full_name"], installation_id=(payload.get("installation") or {}).get("id"))
+    finally:
+        db.close()
+
+
 @router.post("/github")
 async def github_webhook(
     request: Request,
@@ -268,6 +291,7 @@ async def github_webhook(
         # Forget cached access so the dashboard shows the change on the next
         # load instead of after the cache expires.
         repo_access.invalidate()
+        _record_installed(x_github_event, payload)
         logger.info(f"Installation changed ({x_github_event}/{payload.get('action')}); repository access refreshed")
         return {"status": "received", "event": x_github_event, "action": payload.get("action")}
 

@@ -6,6 +6,7 @@ from app.models.api_token import APIToken
 from app.models.registry_credential import RegistryCredential
 from app.models.repository_settings import RepositorySettings
 from app.models.build import Build, BuildApproval
+from app.models.event import Event
 
 __all__ = [
     "User",
@@ -20,4 +21,5 @@ __all__ = [
     "RepositorySettings",
     "Build",
     "BuildApproval",
+    "Event",
 ]

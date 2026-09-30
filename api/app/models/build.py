@@ -31,6 +31,8 @@ class Build(Base):
     log_tail = Column(Text, nullable=True)
     # Billed time, from Cloud Build's own start and finish (monthly limits).
     duration_seconds = Column(Integer, nullable=True)
+    # Time waiting in Cloud Build's queue (its createTime to startTime).
+    queued_seconds = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)

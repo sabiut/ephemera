@@ -95,7 +95,7 @@ function toggleSidebar() {
 
 // ─── Routing ────────────────────────────────────────────
 
-const views = ['overview', 'environments', 'repositories', 'credentials', 'tokens'];
+const views = ['overview', 'environments', 'repositories', 'credentials', 'tokens', 'metrics'];
 
 function navigate() {
     const hash = window.location.hash.slice(1) || 'overview';
@@ -159,6 +159,9 @@ async function loadView(view) {
         case 'tokens':
             await loadTokens();
             renderTokens();
+            break;
+        case 'metrics':
+            await loadMetrics();
             break;
     }
 }
@@ -246,6 +249,7 @@ async function loadUserInfo() {
         if (user) {
             isAdmin = Boolean(user.is_admin);
             features = user.features || {};
+            document.getElementById('navMetrics').hidden = !isAdmin;
             document.getElementById('userName').textContent = user.github_login;
             document.getElementById('userAvatar').src = user.avatar_url || '';
         }
@@ -1081,6 +1085,8 @@ function buildPlanHTML(owner, repo, p) {
     } else if (p.managed_builds_enabled) {
         state = `<p class="reg-help">On. Ephemera will build the services marked above from each pull request's commit; no CI workflow or registry token is needed for them.</p>
             <p style="padding:0 20px 16px;"><button class="btn btn-danger btn-sm" onclick="setManagedBuilds('${o}', '${r}', false, this)">Turn off</button></p>`;
+    } else if (p.can_enable && p.allowlisted && !p.has_slot && p.slots_free === 0) {
+        state = `<p class="reg-help">The managed builds beta is full right now: every build slot is taken. Previews keep working with images built by your CI; check back later.</p>`;
     } else if (p.can_enable && !p.allowlisted) {
         state = `<p class="reg-help">Managed builds are in a limited beta and not open to this repository yet. Until then, build images in your CI (see the setup guide).</p>`;
     } else if (p.status === 'ok') {
@@ -1127,6 +1133,63 @@ async function setManagedBuilds(owner, repo, enabled, button) {
         showToast((enabled ? 'Could not enable managed builds: ' : 'Could not turn them off: ') + e.message, 'error');
     }
     await loadBuildPlan(owner, repo);
+}
+
+// ─── Metrics (admins) ───────────────────────────────────
+//
+// Whether a new repository gets a working preview without help, and what
+// managed builds cost (docs/managed-builds.md, "Measuring success").
+
+function spreadText(sp) {
+    if (!sp || !sp.count) return '<span class="text-muted">no data yet</span>';
+    return `${formatDuration(sp.median_seconds)} median · ${formatDuration(sp.p90_seconds)} p90 <span class="text-muted">(${sp.count})</span>`;
+}
+
+function metricsHTML(m) {
+    const stat = (label, value) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value" style="font-size:1.4rem;">${value}</div></div>`;
+    const share = m.needed_help_share === null ? '-' : `${Math.round(m.needed_help_share * 100)}%`;
+    const reasons = Object.entries(m.needed_help_by_reason || {}).map(([k, v]) => `${escapeHtml(k.replace(/_/g, ' '))}: ${v}`).join(', ');
+    const b = m.builds || {};
+    const outcomes = Object.entries(b.outcomes || {}).map(([k, v]) =>
+        `<tr><td class="mono">${escapeHtml(k)}</td><td>${v}</td></tr>`).join('') || '<tr><td colspan="2" class="text-muted">No builds yet</td></tr>';
+    const minutes = (b.minutes_by_repository || []).map(r =>
+        `<tr><td class="mono">${escapeHtml(r.repository)}</td><td>${r.minutes}</td></tr>`).join('') || '<tr><td colspan="2" class="text-muted">No build minutes yet</td></tr>';
+    const slots = (m.slots.repositories || []).map(([slot, repo]) => `slot ${slot}: ${escapeHtml(repo)}`).join('<br>');
+    return `<div class="stats-grid">
+            ${stat('First previews that needed help', share)}
+            ${stat('Build slots in use', `${m.slots.used} of ${m.slots.total}`)}
+            ${stat(`Builds (last ${m.window_days} days)`, b.total || 0)}
+            ${stat('Deploys that waited to build', m.deploys_waiting_to_build || 0)}
+        </div>
+        <div class="card"><div class="card-header"><span class="card-title">Installation to first verified Ready preview</span></div>
+            <div class="card-body"><table class="table"><tbody>
+                <tr><td>Managed builds</td><td>${spreadText(m.installation_to_verified_ready.managed_builds)}</td></tr>
+                <tr><td>CI images</td><td>${spreadText(m.installation_to_verified_ready.ci_images)}</td></tr>
+                <tr><td>Installed, no preview yet</td><td>${m.installed_no_preview_yet}</td></tr>
+                <tr><td>First previews</td><td>${m.first_previews}, ${m.needed_help} needed help${reasons ? ` (${reasons})` : ''}</td></tr>
+            </tbody></table></div></div>
+        <div class="card"><div class="card-header"><span class="card-title">Managed builds (last ${m.window_days} days)</span></div>
+            <div class="card-body"><table class="table"><tbody>
+                <tr><td>Build time (succeeded)</td><td>${spreadText(b.build_time)}</td></tr>
+                <tr><td>Time queued for a machine</td><td>${spreadText(b.queued_time)}</td></tr>
+            </tbody></table>
+            <div class="section-label" style="padding:0 20px;">Outcomes</div>
+            <table class="table"><tbody>${outcomes}</tbody></table>
+            <div class="section-label" style="padding:0 20px;">Build minutes by repository</div>
+            <table class="table"><tbody>${minutes}</tbody></table>
+            ${slots ? `<p class="reg-help">${slots}</p>` : ''}</div></div>
+        <p class="reg-help">Counted from events recorded since this page was added; repositories installed before then have no installation time.</p>`;
+}
+
+async function loadMetrics() {
+    const body = document.getElementById('metricsBody');
+    try {
+        const m = await apiCall('/api/v1/admin/metrics');
+        document.getElementById('metricsWindow').textContent = `Updated ${timeAgo(m.generated_at)}`;
+        body.innerHTML = metricsHTML(m);
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p>Could not load metrics. ${escapeHtml(e.message)}</p></div>`;
+    }
 }
 
 // ─── Private images (registry credentials) ──────────────

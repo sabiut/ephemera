@@ -127,6 +127,7 @@ def request_environment(db: Session, req: EnvironmentRequest) -> Tuple[Environme
         req.pr_number, req.repository_full_name, namespace=existing.namespace if existing else None)
 
     if existing:
+        was_failed = existing.status == EnvironmentStatus.FAILED
         environment = environment_crud.reset_environment(
             db,
             existing,
@@ -137,6 +138,11 @@ def request_environment(db: Session, req: EnvironmentRequest) -> Tuple[Environme
             environment_url=env_url,
         )
         action: Action = "reprovisioned"
+        if was_failed:
+            # Metrics: recorded after the reset committed, so it cannot end
+            # the admission lock's transaction early.
+            from app.services import metrics
+            metrics.record(db, "retry", req.repository_full_name, environment.id)
         logger.info(f"Re-provisioning environment {environment.namespace} for PR #{req.pr_number}")
     else:
         environment = environment_crud.create_environment(
