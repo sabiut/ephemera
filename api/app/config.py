@@ -71,11 +71,13 @@ class Settings(BaseSettings):
     # before leaving it as DESTROYING for the hourly cleanup to confirm.
     preview_destroy_confirm_seconds: int = 180
     # One task changes a preview at a time. The lock outlives the Celery
-    # hard limit (30 min) only slightly, so a killed worker cannot wedge it.
+    # hard limit (45 min: a managed build of up to 15 minutes, then the
+    # deploy and its readiness checks) only slightly, so a killed worker
+    # cannot wedge it.
     # A task that cannot take the lock waits briefly, then is rescheduled
     # rather than holding a worker: every RETRY seconds, up to MAX_RETRIES
     # times (about an hour and a half with the defaults).
-    environment_lock_seconds: int = 1860
+    environment_lock_seconds: int = 2760
     environment_lock_wait_seconds: int = 30
     environment_lock_retry_seconds: int = 60
     environment_lock_max_retries: int = 60
@@ -90,6 +92,20 @@ class Settings(BaseSettings):
     # services with build:. Off until the build pipeline exists; the
     # dashboard shows the build plan only when this is on.
     managed_builds_enabled: bool = False
+    # Limited beta: only these repositories (comma-separated owner/repo,
+    # case-insensitive) may turn managed builds on.
+    managed_builds_allowlist: str = ""
+    # Where builds run: the project and region of modules/managed-builds.
+    # Buckets, slot accounts and registries follow its naming.
+    gcp_project_id: str = ""
+    managed_builds_region: str = "us-central1"
+    managed_builds_slots: int = 10
+    managed_builds_timeout_seconds: int = 900
+    # A build still queued this long after its timeout is cancelled.
+    managed_builds_queue_allowance_seconds: int = 180
+    managed_builds_poll_seconds: int = 10
+    # The commit's source, compressed, as GitHub serves it.
+    managed_builds_max_source_mb: int = 200
 
     # Preview namespace quotas
     preview_cpu_quota: str = "1"
@@ -137,6 +153,10 @@ class Settings(BaseSettings):
     def admin_login_set(self) -> set[str]:
         """Lower-cased admin logins; GitHub logins are case-insensitive."""
         return {o.strip().lower() for o in self.admin_github_logins.split(",") if o.strip()}
+
+    @property
+    def managed_builds_repositories(self) -> set:
+        return {r.strip().lower() for r in self.managed_builds_allowlist.split(",") if r.strip()}
 
 
 @lru_cache()

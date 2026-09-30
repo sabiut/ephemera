@@ -1,6 +1,6 @@
 # Managed builds: design
 
-Status: design agreed (decisions below). Step 1 (infrastructure) and step 2 (detection and confirmation) are merged; nothing builds yet.
+Status: design agreed (decisions below). Steps 1 (infrastructure), 2 (detection and confirmation) and 3 (the build pipeline, for allowlisted repositories) are merged. Limits (step 4) come before anyone outside the allowlist.
 
 ## Why
 
@@ -114,6 +114,16 @@ The beta succeeds if most new users reach a working preview without help and fas
    - Stored on `repository_settings`: `managed_builds_enabled`, `build_plan_confirmed` (services to build with context, Dockerfile and target), who confirmed it and when.
    - Hidden behind the platform setting `MANAGED_BUILDS_ENABLED` (off by default; `/auth/me` reports it as `features.managed_builds`) until the pipeline exists.
 3. **Build pipeline** behind an allowlist of repositories: queue, source upload, Cloud Build, status polling, logs, deploy integration.
+   - `app/services/managed_builds.py`, called by the deploy task before it applies the services, when `MANAGED_BUILDS_ENABLED` is on, the repository is in `MANAGED_BUILDS_ALLOWLIST` and a collaborator confirmed its plan:
+     1. detect the plan at the commit; a plan that differs from the confirmed one is built as it is and noted in the PR comment;
+     2. refuse PRs from forks (approval comes with step 4);
+     3. assign the repository the lowest free build slot, once;
+     4. fetch the commit's tarball through the GitHub App, strip GitHub's top directory (dropping absolute and `..` paths), and upload it to `slot-N/` of the source bucket;
+     5. start one Cloud Build as the slot's account: a `docker build` step per service (compose's context, Dockerfile, target and build args, `$` escaped from Cloud Build substitution), images pushed as `<slot registry>/<service>:<commit>`, logs to `slot-N/` of the logs bucket, 15-minute timeout;
+     6. poll every 10 seconds, showing "Building web (1m 20s)" on the dashboard. A newer commit cancels the build, and so does a build still unfinished 3 minutes past its timeout. The status, per-service progress, log tail and billed seconds are recorded in `builds`.
+   - The deploy then uses the compose converter with the built images in place of the `build:` sections. A failed build stops the deploy with the reason: step failed (with the failing line), Dockerfile missing, timeout, fork, or a platform error, whose detail stays in the database and logs.
+   - The worker runs as its own Kubernetes service account, `ephemera-worker`, bound by Workload Identity to `ephemera-builds-controller`. The API and beat keep `ephemera-api`, which has no Google identity. Celery's limits are 40 and 45 minutes, and the environment lock 46 minutes, so a build plus a deploy fits.
+   - **Turning it on**: after an infra run has created the module's resources, set `MANAGED_BUILDS_ENABLED: "true"` and `MANAGED_BUILDS_ALLOWLIST: "owner/repo,…"` in `infrastructure/k8s/ephemera/configmap.yaml`, deploy, then enable managed builds on the repository's page.
 4. **Limits**: cancellation, per-repository and platform caps, monthly minutes, image cleanup, fork approval.
 5. **Experience**: Building stage, PR status and comment, build diagnoses with actions, log view; extend the end-to-end test with a managed-build variant.
 6. **Beta**: open to new installations, with the metrics page.

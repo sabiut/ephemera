@@ -10,6 +10,13 @@ data:
   # GitHub logins that see every environment; everyone else sees only their own PRs
   ADMIN_GITHUB_LOGINS: "sabiut"
 
+  # Managed builds (docs/managed-builds.md). Off until tried on the
+  # allowlisted repositories; the worker builds as the Terraform-created
+  # slots in this project (us-central1).
+  MANAGED_BUILDS_ENABLED: "false"
+  MANAGED_BUILDS_ALLOWLIST: ""
+  GCP_PROJECT_ID: "ephemera-dev-2025"
+
   # Kubernetes (will use in-cluster config)
   KUBECONFIG_PATH: ""
   CLUSTER_NAME: "ephemera-dev"

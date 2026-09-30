@@ -274,6 +274,7 @@ const STAGE_LABELS = {
     queued: 'Queued',
     preparing: 'Setting up',
     deploying: 'Deploying services',
+    building: 'Building images',
     waiting_for_image: 'Waiting for image',
     starting: 'Starting services',
     checking_https: 'Checking HTTPS',
@@ -338,6 +339,7 @@ function stepperHTML(env) {
     const status = (env.status || '').toLowerCase();
     const steps = ['queued'];
     if (status === 'provisioning' || status === 'pending' || env.stage === 'preparing') steps.push('preparing');
+    if (env.stage === 'building') steps.push('building');  // managed builds
     steps.push('deploying', 'waiting_for_image', 'starting', 'checking_https', 'ready');
     const current = steps.indexOf(env.stage);
     return `<ol class="stepper">${steps.map((step, i) => {
@@ -1018,6 +1020,8 @@ function buildPlanHTML(owner, repo, p) {
     } else if (p.managed_builds_enabled) {
         state = `<p class="reg-help">On. Ephemera will build the services marked above from each pull request's commit; no CI workflow or registry token is needed for them.</p>
             <p style="padding:0 20px 16px;"><button class="btn btn-danger btn-sm" onclick="setManagedBuilds('${o}', '${r}', false, this)">Turn off</button></p>`;
+    } else if (p.status === 'ok' && !p.allowlisted) {
+        state = `<p class="reg-help">Managed builds are in a limited beta and not open to this repository yet. Until then, build images in your CI (see the setup guide).</p>`;
     } else if (p.status === 'ok') {
         state = `<p class="reg-help">Check the table: Ephemera will build each service marked "Ephemera builds it" from the pull request's own commit, privately, instead of your CI. Services your CI already builds are left alone.</p>
             <p style="padding:0 20px 16px;"><button class="btn btn-primary btn-sm" onclick="setManagedBuilds('${o}', '${r}', true, this)">Enable managed builds</button></p>`;

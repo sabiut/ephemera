@@ -43,6 +43,21 @@ spec:
             configMapKeyRef:
               name: ephemera-config
               key: ADMIN_GITHUB_LOGINS
+        - name: MANAGED_BUILDS_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: MANAGED_BUILDS_ENABLED
+        - name: MANAGED_BUILDS_ALLOWLIST
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: MANAGED_BUILDS_ALLOWLIST
+        - name: GCP_PROJECT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: ephemera-config
+              key: GCP_PROJECT_ID
         - name: KUBECONFIG_PATH
           valueFrom:
             configMapKeyRef:
@@ -224,4 +239,8 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: ephemera-api
+  namespace: ephemera-system
+# The Celery worker does the same cluster work under its own account.
+- kind: ServiceAccount
+  name: ephemera-worker
   namespace: ephemera-system

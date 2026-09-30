@@ -5,6 +5,7 @@ from app.models.credential import CloudCredential, CloudProvider
 from app.models.api_token import APIToken
 from app.models.registry_credential import RegistryCredential
 from app.models.repository_settings import RepositorySettings
+from app.models.build import Build
 
 __all__ = [
     "User",
@@ -17,4 +18,5 @@ __all__ = [
     "APIToken",
     "RegistryCredential",
     "RepositorySettings",
+    "Build",
 ]

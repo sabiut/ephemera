@@ -109,6 +109,7 @@ def managed(monkeypatch):
     repo_access.clear_cache()
     monkeypatch.setattr(repo_access, "github_service", FakeGitHub())
     monkeypatch.setattr(settings, "managed_builds_enabled", True)
+    monkeypatch.setattr(settings, "managed_builds_allowlist", "acme/shop")
     compose = {"text": COMPOSE}
     monkeypatch.setattr(setup_check, "_fetch_compose", lambda repo, ref: ("docker-compose.yml", compose["text"]))
     yield compose
@@ -160,3 +161,11 @@ def test_cannot_enable_with_nothing_to_build(client, auth_headers, managed):
 
 def test_other_repositories_are_not_found(client, auth_headers, managed):
     assert client.get("/api/v1/repositories/other/secret/build-plan", headers=auth_headers).status_code == 404
+
+
+def test_only_allowlisted_repositories_can_turn_it_on(client, auth_headers, managed, monkeypatch):
+    monkeypatch.setattr(settings, "managed_builds_allowlist", "someone/else")
+    assert client.get(URL, headers=auth_headers).json()["allowlisted"] is False
+    r = client.put(URL, json={"enabled": True}, headers=auth_headers)
+    assert r.status_code == 403 and "limited beta" in r.json()["detail"]
+    assert client.put(URL, json={"enabled": False}, headers=auth_headers).status_code == 200  # off always works

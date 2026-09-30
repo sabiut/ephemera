@@ -66,6 +66,9 @@ class PullRequestInfo:
     author_avatar_url: Optional[str]
     # The repository's name as GitHub spells it (the caller may not).
     repository_full_name: Optional[str] = None
+    # Where the PR's commits live: another repository for a fork (None when
+    # the fork was deleted).
+    head_repository_full_name: Optional[str] = None
 
 
 # Status updates and comments are the only way a developer hears about a
@@ -240,6 +243,7 @@ class GitHubService:
             author_login=pr.user.login,
             author_avatar_url=pr.user.avatar_url,
             repository_full_name=pr.base.repo.full_name,
+            head_repository_full_name=pr.head.repo.full_name if pr.head.repo else None,
         )
 
     def is_collaborator(self, installation_id: int, repo_full_name: str, login: str) -> Optional[bool]:
