@@ -7,14 +7,17 @@ step: the repository is connected and its setup check passes; a pull request
 gets a preview that becomes Ready and serves that pull request's commit; a
 push updates the same link to the new commit; closing the pull request
 removes the preview. With --protected, it also checks that an anonymous
-visitor is sent to sign-in.
+visitor is sent to sign-in, and that a reviewer who signs in (through the
+same code-and-callback the browser uses, issued by the API) sees the app and
+then the updated commit.
 
 Unit tests cannot see integration failures (webhook delivery, image builds,
 ingress, certificates, DNS); this does. It creates a branch and a pull
 request in the test repository and always cleans them up, even on failure.
 
 Environment:
-  GITHUB_TOKEN     may push branches and open/close PRs in the test repository
+  GITHUB_TOKEN     fine-grained token for the test repository: Contents and
+                   Pull requests read/write, Commit statuses read
   EPHEMERA_TOKEN   an API token created in the Ephemera dashboard
 Usage:
   python scripts/e2e/first_preview.py --repo sabiut/ephemera-test-app \\
@@ -135,6 +138,10 @@ class Ephemera:
     def settings(self) -> Dict[str, Any]:
         return self._call("GET", f"/api/v1/repositories/{self.repo}/settings")
 
+    def access_links(self, environment_id: int) -> Dict[str, str]:
+        """Sign-in links for a protected preview (one per public service)."""
+        return self._call("POST", f"/api/v1/environments/{environment_id}/access-link")["links"]
+
     def set_protected(self, value: bool) -> Dict[str, Any]:
         return self._call("PUT", f"/api/v1/repositories/{self.repo}/settings", json={"protect_previews": value})
 
@@ -217,6 +224,7 @@ def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, tim
         def first_ready():
             env = wait("the preview to become Ready", ready_on(state["sha"]))
             state["url"] = env.get("environment_url")
+            state["env_id"] = env.get("id")
             status = wait("the commit status", lambda: (gh.ephemera_status(state["sha"]) or {}).get("state") == "success", 120)
             not_verified = [s for s, r in (env.get("readiness") or {}).items() if not r.get("verified")]
             return f"{state['url']}" + (f" (not verified: {', '.join(not_verified)})" if not_verified else "")
@@ -229,6 +237,20 @@ def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, tim
                     raise JourneyFailed(f"anonymous visitor got HTTP {r.status_code}, not the sign-in redirect")
                 return "anonymous visitor sent to sign-in"
             journey.run("Protected link asks for sign-in", anonymous)
+
+            def reviewer():
+                # The same one-minute code and callback the browser sign-in
+                # uses; the client keeps the host's cookie from here on.
+                host = state["url"].split("://", 1)[-1].split("/", 1)[0]
+                links = eph.access_links(state["env_id"])
+                link = next((u for u in links.values() if f"://{host}/" in u), None)
+                if not link:
+                    raise JourneyFailed(f"no sign-in link for {host}: {sorted(links)}")
+                r = http.request("GET", link, follow_redirects=True, timeout=15)
+                if r.status_code != 200 or state["sha"] not in r.text:
+                    raise JourneyFailed(f"after signing in, the preview answered HTTP {r.status_code} without the commit")
+                return f"signed in; serves {state['sha'][:7]}"
+            journey.run("Signed-in reviewer sees the commit", reviewer)
         else:
             journey.run("Preview serves the commit", lambda: (
                 wait(f"{state['url']} to serve {state['sha'][:7]}", serves(state["url"], state["sha"]), 180),
@@ -237,9 +259,10 @@ def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, tim
         def push():
             state["sha2"] = gh.put_file(branch, "e2e/run.txt", f"run {run_id} commit 2\n", f"E2E {run_id}: second commit")
             wait("the update to become Ready", ready_on(state["sha2"]))
-            if not protected:
-                wait(f"{state['url']} to serve {state['sha2'][:7]}", serves(state["url"], state["sha2"]), 180)
-            return f"same link now serves {state['sha2'][:7]}" if not protected else f"updated to {state['sha2'][:7]}"
+            # Protected: the reviewer's session carries on to the new commit.
+            wait(f"{state['url']} to serve {state['sha2'][:7]}", serves(state["url"], state["sha2"]), 180)
+            who = "the signed-in reviewer now sees" if protected else "same link now serves"
+            return f"{who} {state['sha2'][:7]}"
         journey.run("Push updates the preview", push)
 
         def close():

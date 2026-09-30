@@ -116,6 +116,33 @@ def keep_environment(
     return environment
 
 
+@router.post("/{environment_id}/access-link")
+def preview_access_link(
+    environment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Sign-in links for a protected preview, for automated tests and browser
+    tooling that can't click through GitHub sign-in. Each link opens the
+    preview host's own /_ephemera/callback with a one-minute code, exactly as
+    the browser sign-in does, and sets that host's cookie. Only for people
+    who can see the preview.
+    """
+    from urllib.parse import quote
+    from app.services import preview_access
+
+    environment = _visible_or_404(db, current_user, environment_id)
+    if environment.status not in HOLDS_RESOURCES or not environment.service_urls:
+        raise HTTPException(status_code=409, detail="This preview has no running links")
+    links = {}
+    for service, url in sorted(environment.service_urls.items()):
+        host = url.split("://", 1)[-1].split("/", 1)[0]
+        code = preview_access.mint_code(environment.namespace, current_user.id)
+        links[service] = f"https://{host}{preview_access.CALLBACK_PATH}?code={quote(code, safe='')}&rd=%2F"
+    return {"links": links, "expires_in": preview_access.CODE_TTL}
+
+
 @router.get("/{environment_id}/deployments", response_model=List[DeploymentResponse])
 async def list_environment_deployments(
     environment_id: int,

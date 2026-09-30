@@ -8,7 +8,8 @@ name: End-to-end first preview
 #
 # Secrets:
 #   E2E_GITHUB_TOKEN  fine-grained token for the test repository with
-#                     Contents and Pull requests: read and write
+#                     Contents and Pull requests: read and write, and
+#                     Commit statuses: read
 #   EPHEMERA_TOKEN    an API token from the Ephemera dashboard
 
 on:
@@ -18,7 +19,7 @@ on:
         description: Test repository
         default: sabiut/ephemera-test-app
       protected:
-        description: Also check that protected links ask for sign-in
+        description: Also check protected links (anonymous redirect, signed-in reviewer)
         type: boolean
         default: false
 

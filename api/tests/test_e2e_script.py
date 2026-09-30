@@ -72,11 +72,15 @@ class FakeEphemera:
         if self.fail:
             return {"pr_number": 7, "status": "failed", "commit_sha": sha, "error_message": "…401 Unauthorized",
                     "diagnosis": {"title": "Image is private"}}
-        return {"pr_number": 7, "status": "ready", "commit_sha": sha, "environment_url": URL,
+        return {"id": 1, "pr_number": 7, "status": "ready", "commit_sha": sha, "environment_url": URL,
                 "readiness": {"web": {"path": "/", "status": 200, "verified": True}}}
 
     def settings(self):
         return {"protect_previews": self.protected_history[-1]}
+
+    def access_links(self, environment_id):
+        assert environment_id == 1
+        return {"web": f"{URL}/_ephemera/callback?code=abc&rd=%2F"}
 
     def set_protected(self, value):
         self.protected_history.append(value)
@@ -84,17 +88,25 @@ class FakeEphemera:
 
 
 class FakeHttp:
-    """The preview link: serves the latest commit until the PR closes."""
+    """
+    The preview link: serves the latest commit until the PR closes. When
+    protected, only a client that went through the sign-in callback (which
+    sets the host's cookie) reaches the app; everyone else gets sign-in.
+    """
 
     def __init__(self, gh, protected=False):
-        self.gh, self.protected = gh, protected
+        self.gh, self.protected, self.signed_in = gh, protected, False
 
     def request(self, method, url, follow_redirects=True, timeout=15):
         if self.gh.closed:
             return SimpleNamespace(status_code=404, text="default backend", headers={})
-        if self.protected and not follow_redirects:
-            return SimpleNamespace(status_code=303, text="",
-                                   headers={"location": "https://ephemera-api.preview.test/preview-auth/start?rd=x"})
+        if "/_ephemera/callback" in url:
+            self.signed_in = True
+        if self.protected and not self.signed_in:
+            if not follow_redirects:
+                return SimpleNamespace(status_code=303, text="",
+                                       headers={"location": "https://ephemera-api.preview.test/preview-auth/start?rd=x"})
+            return SimpleNamespace(status_code=200, text="<h1>Sign in with GitHub</h1>", headers={})
         return SimpleNamespace(status_code=200, text=f'{{"commit": "{self.gh.commits[-1]}"}}', headers={})
 
 
@@ -127,13 +139,30 @@ def test_a_failed_preview_is_reported_with_its_diagnosis_and_still_cleaned_up():
     assert "❌" in journey.table()
 
 
-def test_protected_links_ask_for_sign_in_and_the_setting_is_restored():
+def test_protected_journey_signs_a_reviewer_in_and_follows_the_update():
     gh = FakeGitHub()
     eph = FakeEphemera(gh, protected=False)
     journey = _run(gh, eph, FakeHttp(gh, protected=True), protected=True)
     names = [s.name for s in journey.steps]
-    assert "Protected link asks for sign-in" in names and "Preview serves the commit" not in names
+    assert names[names.index("Protected link asks for sign-in") + 1] == "Signed-in reviewer sees the commit"
+    assert "Preview serves the commit" not in names
+    push = next(s for s in journey.steps if s.name == "Push updates the preview")
+    assert "signed-in reviewer now sees" in push.detail
     assert eph.protected_history == [False, True, False]  # on for the run, then back as it was
+
+
+def test_a_reviewer_who_cannot_reach_the_app_fails_the_run():
+    class NeverAdmitted(FakeHttp):
+        def request(self, method, url, follow_redirects=True, timeout=15):
+            if "/_ephemera/callback" in url:  # the callback "works" but the cookie is refused
+                return SimpleNamespace(status_code=200, text="<h1>Sign in with GitHub</h1>", headers={})
+            return super().request(method, url, follow_redirects, timeout)
+
+    gh = FakeGitHub()
+    with pytest.raises(e2e.JourneyFailed, match="without the commit"):
+        e2e.run_journey(gh, FakeEphemera(gh), NeverAdmitted(gh, protected=True), protected=True,
+                        poll=0, sleep=lambda s: None, run_id="t3", journey=e2e.Journey())
+    assert gh.deleted_branches == ["e2e/first-preview-t3"]
 
 
 def test_waiting_gives_up_with_what_it_waited_for():
