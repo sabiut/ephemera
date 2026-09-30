@@ -27,6 +27,10 @@ class Diagnosis:
     action: str
     services: List[str] = field(default_factory=list)
     links: List[Dict[str, str]] = field(default_factory=list)
+    # Buttons the dashboard shows beside the explanation, each taking the
+    # user to where the fix is made: {"kind", "label", ...}. Retry is always
+    # offered separately.
+    actions: List[Dict[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> Dict:
         return asdict(self)
@@ -47,6 +51,40 @@ def _names(services: List[str]) -> str:
     return ", ".join(quoted[:-1]) + " and " + quoted[-1]
 
 
+_IMAGE_REF = re.compile(r"(?:image \"?|pulling image \"|pull and unpack image \")([a-z0-9.-]+(?::[0-9]+)?/[^\s\"]+)", re.I)
+
+CHECK = {"kind": "setup_check", "label": "Check this PR's configuration"}
+GUIDE = {"kind": "setup_guide", "label": "Set up image builds"}
+USAGE = {"kind": "usage", "label": "See this repository's previews"}
+
+# Where each failure is fixed. Kinds the dashboard knows how to open.
+_ACTIONS: Dict[str, List[Dict[str, str]]] = {
+    "image_missing": [GUIDE],
+    "image_pull": [CHECK],
+    "invalid_image": [CHECK],
+    "build_only": [GUIDE],
+    "crash": [CHECK],
+    "not_ready": [CHECK],
+    "readiness_failed": [CHECK],
+    "no_answer": [CHECK],
+    "no_public": [CHECK],
+    "no_compose": [CHECK],
+    "variables": [CHECK],
+    "bad_yaml": [CHECK],
+    "capacity": [USAGE],
+}
+
+
+def _actions(category: str, error: str) -> List[Dict[str, str]]:
+    if category == "image_private":
+        # Pre-select the registry the failing image comes from.
+        from app.services.registries import display_registry, image_registry
+        m = _IMAGE_REF.search(error)
+        registry = display_registry(image_registry(m.group(1))) if m else "ghcr.io"
+        return [{"kind": "registry", "label": f"Add a {registry} token", "registry": registry}]
+    return [dict(a) for a in _ACTIONS.get(category, [])]
+
+
 def explain(error: Optional[str], repository: str = "", commit_sha: str = "",
             pr_number: Optional[int] = None) -> Diagnosis:
     """The diagnosis for a failed environment's recorded error."""
@@ -63,7 +101,7 @@ def explain(error: Optional[str], repository: str = "", commit_sha: str = "",
         links.append({"label": "View pull request", "url": f"https://github.com/{repository}/pull/{pr_number}"})
 
     def d(category, title, explanation, action):
-        return Diagnosis(category, title, explanation, action, names, links)
+        return Diagnosis(category, title, explanation, action, names, links, _actions(category, error))
 
     image_pull = any(k in error for k in ("ImagePullBackOff", "ErrImagePull"))
     if "was never published" in error or (image_pull and any(k in lower for k in ("not found", "manifest unknown"))):
