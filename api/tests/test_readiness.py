@@ -47,7 +47,7 @@ def test_probe_accepts_any_non_5xx_and_reports_the_rest(monkeypatch):
         timeout_seconds=0.01, poll_seconds=0,
     )
     assert set(unreachable) == {"api", "echo"}
-    assert unreachable["api"] == "HTTP 503"
+    assert unreachable["api"] == "HTTP 503 at /"
     assert unreachable["echo"].startswith("ConnectError")
 
 
@@ -184,13 +184,17 @@ def wired(monkeypatch):
         state["wait_kwargs"] = kwargs
         return [n for n in names if n not in state["problems"]], dict(state["problems"])
 
-    def fake_probe(urls, timeout_seconds):
+    def fake_probe(urls, paths=None, timeout_seconds=0):
         state["probed"] = dict(urls)
-        return dict(state["unreachable"])
+        state["paths"] = dict(paths or {})
+        readiness = {n: {"path": (paths or {}).get(n, "/"), "status": 200, "verified": True}
+                     for n in urls if n not in state["unreachable"]}
+        readiness.update(state.get("readiness", {}))
+        return dict(state["unreachable"]), readiness
 
     monkeypatch.setattr(tasks, "_active_deployment_service", lambda: FakeDeployService())
     monkeypatch.setattr(tasks.kubernetes_service, "wait_for_deployments_ready", fake_wait)
-    monkeypatch.setattr(tasks, "probe_urls", fake_probe)
+    monkeypatch.setattr(tasks, "check_readiness", fake_probe)
     return state
 
 

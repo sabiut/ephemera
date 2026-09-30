@@ -75,6 +75,8 @@ class Environment(Base):
     # "protected". Set by deploys and by apply_preview_access, so the
     # dashboard can tell a requested change from one in effect.
     access_applied = Column(String, nullable=True)
+    # The last readiness check: {service: {path, status, verified}}.
+    readiness = Column(JSON, nullable=True)
 
     # Progress of the current deployment, for the dashboard: a stage key
     # (see STAGES), a human detail such as which image it waits for, when the

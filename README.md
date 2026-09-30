@@ -181,6 +181,21 @@ The cluster pulls the image, so it needs read access to the registry. For privat
 
 Supported substitutions follow docker compose: `${VAR}`, `$VAR`, `${VAR:-default}`, `${VAR-default}`, `${VAR:?message}` (fails the preview with that message), and `$$` for a literal `$`. Ephemera provides `EPHEMERA_SHA`, `EPHEMERA_SHA_SHORT` (7 characters) and `EPHEMERA_REPOSITORY` (the repository's `owner/name` in lowercase, so `image: ghcr.io/${EPHEMERA_REPOSITORY}:${EPHEMERA_SHA}` keeps working in forks); other unset variables become empty strings and are listed in the PR comment. A service with a `build:` section whose image is not tagged per commit still deploys, but the comment warns that it may not contain the PR's changes.
 
+## When a preview is "Ready"
+
+After the pods are up, Ephemera requests each public service over HTTPS. Add the label `ephemera.readiness-path` to a service to say which path proves it works:
+
+```yaml
+services:
+  web:
+    image: ghcr.io/acme/web:${EPHEMERA_SHA}
+    ports: ["8080:8080"]
+    labels:
+      ephemera.readiness-path: /health
+```
+
+With a readiness path, the preview is Ready only when that path answers 2xx or 3xx; anything else is retried until `PREVIEW_READY_TIMEOUT_SECONDS` and then fails, explained as "the readiness check failed". Without one, 2xx or 3xx on `/` is verified, and a 4xx on `/` is reported as **deployed and responding, not verified** (in the commit status, the PR comment's Checks and the dashboard) rather than as working, since many APIs have no `/` route. 5xx and connection errors are retried and then fail. The setup check suggests the label for public services that lack it.
+
 ## Protected previews
 
 Preview links are public by default. A repository can switch its previews to **collaborators only** (dashboard: Repositories, then Preview access): viewers then sign in with GitHub, and only the pull request's author, the repository's collaborators and Ephemera admins get in, the same people who see the preview in the dashboard. Saving the setting changes running previews straight away (one job per preview, under its environment lock so it never interleaves with a deploy); the dashboard shows when every running preview has the new access. Each preview records the access its routes actually have (`access_applied`).

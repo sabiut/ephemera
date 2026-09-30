@@ -59,6 +59,7 @@ class EnvironmentResponse(BaseModel):
     removal_reason: Optional[str] = None
     kept_at: Optional[datetime] = None
     access_applied: Optional[str] = None
+    readiness: Optional[Dict[str, Any]] = None
     stage: Optional[str] = None
     stage_detail: Optional[str] = None
     stage_started_at: Optional[datetime] = None

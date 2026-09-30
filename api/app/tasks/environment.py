@@ -9,7 +9,7 @@ These tasks handle async operations for Kubernetes environments including:
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from celery import Task
 from sqlalchemy.orm import Session
@@ -26,7 +26,7 @@ from app.services import ai_deployment_service
 from app.services.deployment import deployment_service
 from app.services.github import github_service
 from app.services.kubernetes import kubernetes_service
-from app.services.deployment import choose_primary_url, probe_urls
+from app.services.deployment import check_readiness, choose_primary_url
 from app.services import preview_access, registries
 
 logger = logging.getLogger(__name__)
@@ -208,11 +208,14 @@ def _run_deployment(
                     f"{name} ({reason})" for name, reason in problems.items()
                 )
             else:
-                stage("checking_https", "Checking that the preview links answer over HTTPS")
-                unreachable = probe_urls(
-                    result.get("service_urls") or {},
+                paths = result.get("readiness_paths") or {}
+                stage("checking_https", "Checking that the preview answers" +
+                      (f" at {', '.join(sorted(set(paths.values())))}" if paths else " over HTTPS"))
+                unreachable, readiness = check_readiness(
+                    result.get("service_urls") or {}, paths,
                     timeout_seconds=settings.preview_ready_timeout_seconds,
                 )
+                result["readiness"] = readiness
                 if unreachable:
                     result["success"] = False
                     result["error"] = "Preview URLs did not answer: " + "; ".join(
@@ -243,6 +246,8 @@ def _run_deployment(
         result["primary_url"] = primary
         if environment:
             environment_crud.record_service_urls(db, environment, urls, primary)
+            environment.readiness = result.get("readiness") or None
+            db.commit()
 
     if latest:
         ok = bool(result.get("success"))
@@ -256,6 +261,31 @@ def _run_deployment(
         )
 
     return result
+
+
+def _ready_description(result: Dict[str, Any], verified: str) -> str:
+    """The commit status: "ready" only when every public service was verified."""
+    unverified = [(s, r) for s, r in (result.get("readiness") or {}).items() if not r.get("verified")]
+    if not unverified:
+        return verified
+    service, r = unverified[0]
+    return f"Deployed, not verified: {service} {r['path']} returned {r['status']}"
+
+
+def _readiness_lines(result: Dict[str, Any]) -> List[str]:
+    readiness = result.get("readiness") or {}
+    if not readiness:
+        return []
+    lines = ["\n**Checks**:"]
+    for service, r in sorted(readiness.items()):
+        if r.get("verified"):
+            lines.append(f"- **{service}**: `{r['path']}` answered {r['status']}")
+        else:
+            lines.append(f"- **{service}**: responding, but `{r['path']}` returned {r['status']}, so Ephemera couldn't "
+                         f"confirm it works. Add the label `ephemera.readiness-path: /health` (a path that returns 200) "
+                         f"to this service in docker-compose.yml.")
+    lines.append("")
+    return lines
 
 
 def _deployment_summary(result: Dict[str, Any]) -> str:
@@ -272,6 +302,8 @@ def _deployment_summary(result: Dict[str, Any]) -> str:
         for service in services:
             lines.append(f"- **{service}**: {urls[service]}" if service in urls else f"- {service}")
         lines.append("")
+
+    lines += _readiness_lines(result)
 
     skipped = result.get("skipped_services", [])
     if skipped:
@@ -407,7 +439,7 @@ Your preview environment has been created!
 **Namespace**: `{environment.namespace}`
 **Status**: Ready{_deployment_summary(result)}{FOOTER}"""
         _notify(installation_id, repo_full_name, pr_number, commit_sha,
-                "success", "Preview environment ready", comment, target_url=env_url)
+                "success", _ready_description(result, "Preview environment ready"), comment, target_url=env_url)
 
         return {
             "success": True,
@@ -592,7 +624,7 @@ Redeployed at `{commit_sha[:8]}`.
 **Namespace**: `{environment.namespace}`
 **Status**: Ready{_deployment_summary(result)}{FOOTER}"""
         _notify(installation_id, repo_full_name, pr_number, commit_sha,
-                "success", "Preview environment updated", comment, target_url=env_url)
+                "success", _ready_description(result, "Preview environment updated"), comment, target_url=env_url)
 
         return {
             "success": True,

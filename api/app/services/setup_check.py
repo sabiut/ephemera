@@ -16,7 +16,8 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from app.services.compose import PUBLIC_LABEL, classify_service, commit_variables, image_report, interpolate
+from app.services.compose import PUBLIC_LABEL, READINESS_LABEL, readiness_path
+from app.services.compose import classify_service, commit_variables, image_report, interpolate
 from app.services.deployment import COMPOSE_FILENAMES, choose_primary_url, parse_port
 from app.services.github import InstalledRepository, github_service
 
@@ -138,6 +139,11 @@ def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch
                       f"Add the label {PUBLIC_LABEL}: \"true\" if reviewers should open it."))
         if public:
             public_urls[name] = name
+            if not readiness_path(cfg):
+                add(Check("ok", f"{name}: add a readiness path (optional)",
+                          "Without one, Ready only means the service responds.",
+                          f"Add the label {READINESS_LABEL}: /health (a path that returns 200 when {name} works) "
+                          "so Ready means the preview works."))
         report.services.append(ServiceSummary(
             name=name, image=images.images.get(name), deployable=deployable,
             commit_image=name in images.pinned, public=public,
