@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from kubernetes.client.rest import ApiException
 
+from app.services import preview_access
 from app.services.compose import build_only_blocker, classify_service, commit_variables, image_report, interpolate
 
 logger = logging.getLogger(__name__)
@@ -162,7 +163,12 @@ def probe_urls(
     while pending and time.monotonic() < deadline:
         for service, url in list(pending.items()):
             try:
-                response = httpx.get(url, timeout=10.0, follow_redirects=True)
+                # A protected preview would redirect to sign-in (which also
+                # answers), so the probe proves itself to the auth check and
+                # reaches the application.
+                host = url.split("://", 1)[-1].split("/", 1)[0]
+                response = httpx.get(url, timeout=10.0, follow_redirects=True,
+                                     headers={preview_access.PROBE_HEADER: preview_access.probe_value(host)})
             except Exception as e:  # connection, TLS, DNS
                 last_reason[service] = f"{type(e).__name__}: {e}"[:200]
                 continue
@@ -186,6 +192,15 @@ class DeploymentService:
         # repository's registry credentials before it applies manifests; both
         # the converter and the AI path apply through this object.
         self.pull_secrets: Dict[str, str] = {}
+        # Namespaces whose repository protects its previews, set likewise.
+        self.protected: set = set()
+
+    def set_protection(self, namespace: str, protected: bool) -> None:
+        """Whether this namespace's previews require sign-in (see preview_access)."""
+        if protected:
+            self.protected.add(namespace)
+        else:
+            self.protected.discard(namespace)
 
     def set_pull_secret(self, namespace: str, secret_name: Optional[str]) -> None:
         if secret_name:
@@ -468,6 +483,11 @@ class DeploymentService:
                     secrets.append({"name": pull_secret})
                 pod["imagePullSecrets"] = secrets
 
+        # Not the sign-in route itself: its callback must work before the
+        # viewer has the cookie.
+        if kind == "Ingress" and namespace in self.protected and name != preview_access.AUTH_SERVICE:
+            metadata.setdefault("annotations", {}).update(preview_access.ingress_annotations())
+
         if kind == "Deployment" and revision:
             template_meta = manifest.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {})
             template_meta.setdefault("annotations", {})[REVISION_ANNOTATION] = revision
@@ -498,7 +518,10 @@ class DeploymentService:
         # survived from the previous deployment. That kept a broken command
         # alive through every retry of a failed preview. Other kinds keep
         # patching, since e.g. a Service's clusterIP cannot be replaced.
-        update = self.k8s.apps_v1.replace_namespaced_deployment if kind == "Deployment" else patch
+        # Ingresses are replaced too: a merge patch would keep the auth
+        # annotations after a repository turns preview protection off.
+        update = (self.k8s.apps_v1.replace_namespaced_deployment if kind == "Deployment"
+                  else self.k8s.networking_v1.replace_namespaced_ingress if kind == "Ingress" else patch)
         try:
             try:
                 create(namespace=namespace, body=manifest)
@@ -544,7 +567,18 @@ class DeploymentService:
 
         namespaces = {m.get("metadata", {}).get("namespace") for m in manifests}
         if len(namespaces) == 1 and None not in namespaces:
-            failed += self.prune_obsolete(namespaces.pop(), manifests)
+            namespace = next(iter(namespaces))
+            if namespace in self.protected and service_urls:
+                # The sign-in callback route for every public host. Added to
+                # the manifests so pruning keeps it, and drops it when the
+                # repository turns protection off.
+                hosts = [u.split("://", 1)[1].split("/", 1)[0] for u in service_urls.values()]
+                extra = preview_access.auth_manifests(namespace, hosts)
+                for manifest in extra:
+                    if not self.apply_manifest(manifest, revision=revision):
+                        failed.append(f"{manifest['kind']}/{manifest['metadata']['name']}")
+                manifests = list(manifests) + extra
+            failed += self.prune_obsolete(namespace, manifests)
 
         return applied, failed, service_urls
 
