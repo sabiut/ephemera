@@ -13,8 +13,8 @@ data:
   # Managed builds (docs/managed-builds.md). Off until tried on the
   # allowlisted repositories; the worker builds as the Terraform-created
   # slots in this project (us-central1).
-  MANAGED_BUILDS_ENABLED: "false"
-  MANAGED_BUILDS_ALLOWLIST: ""
+  MANAGED_BUILDS_ENABLED: "true"
+  MANAGED_BUILDS_ALLOWLIST: "sabiut/ephemera-test-app"
   GCP_PROJECT_ID: "ephemera-dev-2025"
 
   # Kubernetes (will use in-cluster config)
