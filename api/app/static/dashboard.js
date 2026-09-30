@@ -301,6 +301,26 @@ setInterval(() => {
     });
 }, 1000);
 
+// "Ready" only when every public service passed its check; otherwise say so.
+function unverifiedChecks(env) {
+    return Object.entries(env.readiness || {}).filter(([, r]) => !r.verified);
+}
+
+function readinessLineHTML(env) {
+    if ((env.status || '').toLowerCase() !== 'ready' || !unverifiedChecks(env).length) return '';
+    return `<div class="text-sm" style="margin-top:4px;"><a class="row-link" style="color:#eab308;" onclick="openEnvironment(${env.id})">Responding, not verified</a></div>`;
+}
+
+function checksHTML(env) {
+    const entries = Object.entries(env.readiness || {}).sort();
+    if (!entries.length) return '';
+    return `<div class="section-label">Checks</div><ul class="history">${entries.map(([service, r]) => r.verified
+        ? `<li><span class="mono">${escapeHtml(service)}</span><span style="color:#22c55e;">✓</span><span class="text-muted"><code>${escapeHtml(r.path)}</code> answered ${r.status}</span></li>`
+        : `<li><span class="mono">${escapeHtml(service)}</span><span style="color:#eab308;">!</span><span class="text-muted"><code>${escapeHtml(r.path)}</code> returned ${r.status}: responding, but not confirmed working</span>
+           <span class="why">Add <code>ephemera.readiness-path: /health</code> (a path that returns 200) to ${escapeHtml(service)} in docker-compose.yml so Ready means it works.</span></li>`
+    ).join('')}</ul>`;
+}
+
 function stageLineHTML(env) {
     const status = (env.status || '').toLowerCase();
     if (!PENDING_STATUSES.includes(status) || !env.stage) return '';
@@ -409,7 +429,7 @@ function envTableHTML(envs) {
                         <td>#${env.pr_number || '-'}</td>
                         <td class="text-muted">${escapeHtml(env.owner_login || '-')}</td>
                         <td class="mono text-muted">${escapeHtml(env.branch_name || '-')}</td>
-                        <td>${statusBadge(env.status)}${stageLineHTML(env)}${envErrorHTML(env)}</td>
+                        <td>${statusBadge(env.status)}${stageLineHTML(env)}${readinessLineHTML(env)}${envErrorHTML(env)}</td>
                         <td>${envPreviewHTML(env)}</td>
                         <td class="mono text-muted text-sm">${escapeHtml((env.commit_sha || '').slice(0, 8) || '-')}</td>
                         <td class="text-muted text-sm">${timeAgo(env.created_at)}</td>
@@ -488,7 +508,8 @@ function renderEnvironmentDetail() {
         </div>
         ${env.error_message ? `<details class="tech-details"><summary>Technical details</summary><pre>${escapeHtml(env.error_message)}</pre></details>` : ''}`;
     } else if (status === 'ready') {
-        main = `<div class="detail-note">Ready. ${envPreviewHTML(env)}</div>`;
+        const unverified = unverifiedChecks(env).length;
+        main = `<div class="detail-note">${unverified ? 'Deployed and responding, but not every check passed.' : 'Ready.'} ${envPreviewHTML(env)}</div>${checksHTML(env)}`;
     } else if (status === 'destroying') {
         main = '<div class="detail-note">Being removed. This updates automatically.</div>';
     } else if (PENDING_STATUSES.includes(status)) {

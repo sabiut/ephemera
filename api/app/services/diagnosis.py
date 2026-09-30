@@ -112,6 +112,12 @@ def explain(error: Optional[str], repository: str = "", commit_sha: str = "",
                  "The preview's services didn't fit in the space available for previews.",
                  "Retry in a few minutes. If it keeps happening, the preview may need fewer or smaller "
                  "services, or your Ephemera administrator may need to add capacity.")
+    at_path = next((r for r in per_service.values() if re.match(r"HTTP [45]\d\d at /\S+", r)), None)
+    if "Preview URLs did not answer" in error and at_path and not at_path.endswith(" at /"):
+        return d("readiness_failed", "The readiness check failed",
+                 f"{_names(names).capitalize()} started, but its readiness path answered {at_path.replace('HTTP ', '')}.",
+                 "Check that ephemera.readiness-path in docker-compose.yml names a route this commit serves and that "
+                 "it returns 200 once the app is up. Then push a commit or retry.")
     if "Preview URLs did not answer" in error:
         reason = next(iter(per_service.values()), "")
         return d("no_answer", "Preview didn't respond",

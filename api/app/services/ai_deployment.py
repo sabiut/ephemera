@@ -18,6 +18,7 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 
+from app.services.compose import readiness_path
 from app.services.compose import build_only_blocker, classify_service, commit_variables, image_report, interpolate
 from app.services.ai_prompts import (
     SYSTEM_PROMPT,
@@ -391,6 +392,8 @@ class AIDeploymentService:
                 "services": services,
                 "skipped_services": skipped,
                 "service_urls": service_urls,
+                "readiness_paths": {n: p for n, cfg in ((compose_doc or {}).get("services") or {}).items()
+                                    if (p := readiness_path(cfg if isinstance(cfg, dict) else {}))},
                 "ai_generated": True,
                 "ai_plan": plan_summary,
                 "error": f"Failed manifests: {', '.join(failed)}" if failed else None,

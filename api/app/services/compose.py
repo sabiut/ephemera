@@ -107,6 +107,15 @@ def image_report(compose: Dict[str, Any], commit_sha: Optional[str]) -> ImageRep
 # ---------------------------------------------------------------- public vs internal
 
 PUBLIC_LABEL = "ephemera.public"
+# The path Ephemera requests to decide a service is working ("Ready" then
+# means that path answered 2xx/3xx), e.g. ephemera.readiness-path: /health.
+READINESS_LABEL = "ephemera.readiness-path"
+
+
+def readiness_path(cfg: Dict[str, Any]) -> Optional[str]:
+    """The service's readiness path, if it sets a valid one."""
+    value = _labels(cfg if isinstance(cfg, dict) else {}).get(READINESS_LABEL, "").strip()
+    return value if value.startswith("/") and not value.startswith("//") else None
 
 # Images whose ports speak a database, cache or queue protocol, not HTTP.
 INTERNAL_IMAGES = {

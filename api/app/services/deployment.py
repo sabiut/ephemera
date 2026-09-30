@@ -17,6 +17,7 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from app.services import preview_access
+from app.services.compose import readiness_path
 from app.services.compose import build_only_blocker, classify_service, commit_variables, image_report, interpolate
 
 logger = logging.getLogger(__name__)
@@ -140,45 +141,81 @@ def choose_primary_url(services: List[str], service_urls: Dict[str, str]) -> Opt
     return next(iter(service_urls.values()), None)
 
 
-def probe_urls(
+def check_readiness(
     urls: Dict[str, str],
+    paths: Optional[Dict[str, str]] = None,
     timeout_seconds: int = 300,
     poll_seconds: float = 5.0,
-) -> Dict[str, str]:
+    unverified_grace_seconds: float = 30.0,
+) -> Tuple[Dict[str, str], Dict[str, Dict[str, Any]]]:
     """
-    Wait until every public URL answers over HTTPS, or the timeout passes.
+    Decide, per public service, whether the preview actually works.
 
-    Any HTTP status below 500 counts as reachable: the application may well
-    return 404 on "/" and still be working. TLS errors are expected for the
-    first minute while cert-manager issues the certificate, so they are
-    retried rather than treated as failures.
+    - With a readiness path (ephemera.readiness-path): the path must answer
+      2xx or 3xx (after redirects). Anything else is retried until the
+      timeout and then reported as a failure, e.g. "HTTP 404 at /health".
+    - Without one: 2xx/3xx on "/" is verified. A 4xx on "/" means the
+      application responds but Ephemera cannot tell whether it works (many
+      APIs have no "/" route): after a short grace (ingress-nginx's default
+      backend also answers 404 until the route is live) it is recorded as
+      responding but not verified, not as a failure.
+    - 5xx and connection or TLS errors are retried until the timeout.
 
-    Returns {service: reason} for URLs that never answered.
+    Returns (failures {service: reason}, readiness {service: {path, status,
+    verified}}) for every service that answered.
     """
     import httpx  # local import: keeps this module importable without network deps in tests
 
+    paths = paths or {}
     pending = dict(urls)
     last_reason: Dict[str, str] = {}
-    deadline = time.monotonic() + timeout_seconds
+    readiness: Dict[str, Dict[str, Any]] = {}
+    first_4xx: Dict[str, float] = {}
+    start = time.monotonic()
+    deadline = start + timeout_seconds
     while pending and time.monotonic() < deadline:
         for service, url in list(pending.items()):
+            path = paths.get(service)
+            target = url.rstrip("/") + (path or "/")
             try:
                 # A protected preview would redirect to sign-in (which also
                 # answers), so the probe proves itself to the auth check and
                 # reaches the application.
                 host = url.split("://", 1)[-1].split("/", 1)[0]
-                response = httpx.get(url, timeout=10.0, follow_redirects=True,
+                response = httpx.get(target, timeout=10.0, follow_redirects=True,
                                      headers={preview_access.PROBE_HEADER: preview_access.probe_value(host)})
             except Exception as e:  # connection, TLS, DNS
                 last_reason[service] = f"{type(e).__name__}: {e}"[:200]
                 continue
-            if response.status_code < 500:
+            code = response.status_code
+            shown = path or "/"
+            if 200 <= code < 400:
+                readiness[service] = {"path": shown, "status": code, "verified": True}
                 pending.pop(service, None)
+            elif 400 <= code < 500 and not path:
+                now = time.monotonic()
+                first_4xx.setdefault(service, now)
+                if now - first_4xx[service] >= unverified_grace_seconds:
+                    readiness[service] = {"path": shown, "status": code, "verified": False}
+                    pending.pop(service, None)
+                else:
+                    last_reason[service] = f"HTTP {code} at {shown}"
             else:
-                last_reason[service] = f"HTTP {response.status_code}"
+                last_reason[service] = f"HTTP {code} at {shown}"
         if pending:
             time.sleep(poll_seconds)
-    return {service: last_reason.get(service, "no response") for service in pending}
+    # Out of time: a service that only ever gave a 4xx on "/" still responds.
+    for service in list(pending):
+        if service in first_4xx and not paths.get(service):
+            code = int(last_reason[service].split()[1])
+            readiness[service] = {"path": "/", "status": code, "verified": False}
+            pending.pop(service)
+    return {service: last_reason.get(service, "no response") for service in pending}, readiness
+
+
+def probe_urls(urls: Dict[str, str], timeout_seconds: int = 300, poll_seconds: float = 5.0) -> Dict[str, str]:
+    """Failures only, with no readiness paths (see check_readiness)."""
+    return check_readiness(urls, None, timeout_seconds, poll_seconds, unverified_grace_seconds=0)[0]
 
 
 class DeploymentService:
@@ -740,6 +777,8 @@ class DeploymentService:
                 "services": deployed_services,
                 "skipped_services": skipped,
                 "service_urls": service_urls,
+                "readiness_paths": {n: p for n, cfg in compose["services"].items()
+                                    if (p := readiness_path(cfg if isinstance(cfg, dict) else {}))},
                 "images": report.images,
                 "unpinned_builds": report.unpinned_builds,
                 "unset_variables": interpolated.unset,
