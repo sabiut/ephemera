@@ -1,6 +1,6 @@
 # Managed builds: design
 
-Status: design agreed (decisions below). No code yet.
+Status: design agreed (decisions below). Step 1 (infrastructure) and step 2 (detection and confirmation) are merged; nothing builds yet.
 
 ## Why
 
@@ -109,6 +109,10 @@ The beta succeeds if most new users reach a working preview without help and fas
 
 1. **Infrastructure** (Terraform, `modules/managed-builds`): Cloud Build API; source (1-day) and logs (30-day) buckets; the controller identity for the worker; `build_slots` slots, each a service account plus a registry with a cleanup policy and conditional bucket access.
 2. **Detection and confirmation**: build plan API and the Repositories page table; nothing builds yet.
+   - `app/services/build_plan.py` sorts every compose service into *Ephemera builds it*, *your CI builds it* (an `image:` with `${EPHEMERA_SHA}`), *ready-made image*, or *not supported yet* with the reason (build secrets, `ssh`, `dockerfile_inline`, a context outside the repository, several platforms, `network: host`).
+   - `GET /api/v1/repositories/{owner}/{repo}/build-plan` (`?pr=N` for a pull request's commit) returns the plan, whether managed builds are on, and how it differs from the confirmed plan. `PUT` with `{"enabled": true, "signature": …}` confirms the plan the collaborator was shown (refused if the default branch changed since); `{"enabled": false}` turns it off.
+   - Stored on `repository_settings`: `managed_builds_enabled`, `build_plan_confirmed` (services to build with context, Dockerfile and target), who confirmed it and when.
+   - Hidden behind the platform setting `MANAGED_BUILDS_ENABLED` (off by default; `/auth/me` reports it as `features.managed_builds`) until the pipeline exists.
 3. **Build pipeline** behind an allowlist of repositories: queue, source upload, Cloud Build, status polling, logs, deploy integration.
 4. **Limits**: cancellation, per-repository and platform caps, monthly minutes, image cleanup, fork approval.
 5. **Experience**: Building stage, PR status and comment, build diagnoses with actions, log view; extend the end-to-end test with a managed-build variant.

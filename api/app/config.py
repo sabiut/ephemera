@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     preview_max_active_per_repository: int = 5
     preview_idle_days: int = 7
 
+    # Managed builds (docs/managed-builds.md): Ephemera builds the compose
+    # services with build:. Off until the build pipeline exists; the
+    # dashboard shows the build plan only when this is on.
+    managed_builds_enabled: bool = False
+
     # Preview namespace quotas
     preview_cpu_quota: str = "1"
     preview_memory_quota: str = "2Gi"

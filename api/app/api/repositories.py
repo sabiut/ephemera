@@ -3,7 +3,7 @@ Repositories the caller can work with: the ones the Ephemera GitHub App is
 installed on and the caller collaborates on (all of them for admins).
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,10 +12,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, is_admin
+from app.config import get_settings
 from app.crud import environment as environment_crud
 from app.database import get_db
 from app.models import Environment, RepositorySettings, User
-from app.services import provisioning, registries, repo_access, setup_check, setup_guide
+from app.services import build_plan, provisioning, registries, repo_access, setup_check, setup_guide
 from app.services.github import GitHubUnavailable, InstalledRepository, github_service
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -241,6 +242,92 @@ async def repository_usage(owner: str, repo: str, db: Session = Depends(get_db),
     installed = _accessible_repo(owner, repo, current_user)
     prs, limit = provisioning.repository_usage(db, installed.full_name)
     return UsageResponse(used=len(prs), limit=limit, pull_requests=prs)
+
+
+def _managed_builds_available() -> None:
+    if not get_settings().managed_builds_enabled:
+        raise HTTPException(status_code=404, detail="Managed builds aren't available on this server yet")
+
+
+def _settings_row(db: Session, repository_full_name: str):
+    return db.query(RepositorySettings).filter(
+        func.lower(RepositorySettings.repository_full_name) == repository_full_name.lower()).first()
+
+
+def _detect_plan(installed: InstalledRepository, ref: Optional[str]) -> build_plan.BuildPlan:
+    _, content = setup_check._fetch_compose(installed, ref or installed.default_branch)
+    return build_plan.detect(content)
+
+
+@router.get("/repositories/{owner}/{repo}/build-plan")
+async def get_build_plan(owner: str, repo: str, pr: Optional[int] = None, db: Session = Depends(get_db),
+                         current_user: User = Depends(get_current_user)):
+    """
+    What managed builds would build for this repository: every compose
+    service with what happens to it, detected from the default branch (or a
+    pull request's latest commit with ``pr=N``), plus whether the repository
+    has managed builds on and how the plan differs from the confirmed one.
+    """
+    _managed_builds_available()
+    installed = _accessible_repo(owner, repo, current_user)
+    ref, label = _resolve_ref(installed, pr)
+    plan = _detect_plan(installed, ref)
+    row = _settings_row(db, installed.full_name)
+    enabled = bool(row and row.managed_builds_enabled)
+    body = plan.as_dict()
+    body.update({
+        "ref_label": label or installed.default_branch,
+        "pr_number": pr,
+        "managed_builds_enabled": enabled,
+        "confirmed_by": row.build_plan_confirmed_by if enabled else None,
+        "confirmed_at": row.build_plan_confirmed_at if enabled else None,
+        "differences": build_plan.differences(row.build_plan_confirmed, plan.signature()) if enabled else [],
+    })
+    return body
+
+
+class BuildPlanChange(BaseModel):
+    enabled: bool
+    # The plan the collaborator was shown (its "signature"): enabling checks
+    # it still matches the default branch, so nobody confirms a plan they
+    # did not see.
+    signature: Optional[List[dict]] = None
+
+
+@router.put("/repositories/{owner}/{repo}/build-plan")
+def put_build_plan(owner: str, repo: str, body: BuildPlanChange, db: Session = Depends(get_db),
+                   current_user: User = Depends(get_current_user)):
+    """
+    Turn managed builds on by confirming the default branch's build plan
+    (also how a changed plan is confirmed again), or off. Nothing builds
+    yet: the build pipeline follows in a later release.
+    """
+    _managed_builds_available()
+    installed = _accessible_repo(owner, repo, current_user)
+    row = _settings_row(db, installed.full_name)
+    if row is None:
+        row = RepositorySettings(repository_full_name=installed.full_name, protect_previews=False)
+        db.add(row)
+    if body.enabled:
+        plan = _detect_plan(installed, None)
+        if plan.status != "ok":
+            raise HTTPException(status_code=409, detail=plan.message)
+        if body.signature is not None and body.signature != plan.signature():
+            raise HTTPException(status_code=409, detail="The build plan changed since it was shown. Review it and "
+                                                        "confirm again.")
+        row.managed_builds_enabled = True
+        row.build_plan_confirmed = plan.signature()
+        row.build_plan_confirmed_by = current_user.github_login
+        row.build_plan_confirmed_at = datetime.now(timezone.utc)
+    else:
+        row.managed_builds_enabled = False
+        row.build_plan_confirmed = None
+        row.build_plan_confirmed_by = None
+        row.build_plan_confirmed_at = None
+    row.updated_by_login = current_user.github_login
+    db.commit()
+    return {"managed_builds_enabled": row.managed_builds_enabled, "confirmed_by": row.build_plan_confirmed_by,
+            "confirmed_at": row.build_plan_confirmed_at}
 
 
 class PullResponse(BaseModel):
