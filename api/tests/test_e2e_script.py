@@ -16,6 +16,13 @@ e2e = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(e2e)
 
 REPO = "acme/app"
+TEST_APP_COMPOSE = """services:
+  web:
+    build: .
+    image: ghcr.io/${EPHEMERA_REPOSITORY}:${EPHEMERA_SHA}
+    ports:
+      - "80:80"
+"""
 URL = "https://pr-7-app-abc123-web.preview.test"
 
 
@@ -49,6 +56,9 @@ class FakeGitHub:
 
     def ephemera_status(self, sha):
         return {"state": "success"}
+
+    def get_file(self, ref, path):
+        return TEST_APP_COMPOSE
 
 
 class FakeEphemera:
@@ -85,6 +95,16 @@ class FakeEphemera:
     def set_protected(self, value):
         self.protected_history.append(value)
         return {"protect_previews": value}
+
+    managed = True
+
+    def build_plan(self):
+        return {"managed_builds_enabled": self.managed, "confirmed_by": "octocat"}
+
+    def builds(self, environment_id):
+        return [{"commit_sha": sha, "status": "succeeded", "duration_seconds": 80,
+                 "images": {"web": f"us-central1-docker.pkg.dev/p/ephemera-builds-0/web:{sha}"}}
+                for sha in reversed(self.gh.commits)]
 
 
 class FakeHttp:
@@ -176,3 +196,41 @@ def test_the_script_needs_its_tokens(monkeypatch, capsys):
     monkeypatch.delenv("EPHEMERA_TOKEN", raising=False)
     assert e2e.main([]) == 2
     assert "Set GITHUB_TOKEN, EPHEMERA_TOKEN." in capsys.readouterr().err
+
+
+def test_the_managed_build_journey_hands_web_to_ephemera_and_checks_each_build():
+    gh = FakeGitHub()
+    puts = []
+    original = gh.put_file
+    gh.put_file = lambda branch, path, content, message: puts.append((path, content)) or original(branch, path, content, message)
+    journey = _run(gh, FakeEphemera(gh), FakeHttp(gh), managed_build=True)
+    names = [s.name for s in journey.steps]
+    assert names[2] == "Managed builds on" and "Built by Ephemera" in names and all(s.ok for s in journey.steps)
+    compose = next(c for p, c in puts if p == "docker-compose.yml")
+    assert "image:" not in compose and "GIT_SHA: ${EPHEMERA_SHA}" in compose
+    push = next(s for s in journey.steps if s.name == "Push updates the preview")
+    assert "web built in 80s as ephemera-builds-0/web" in push.detail
+
+
+def test_the_managed_build_journey_needs_managed_builds_on():
+    gh = FakeGitHub()
+    eph = FakeEphemera(gh)
+    eph.managed = False
+    with pytest.raises(e2e.JourneyFailed, match="managed builds are off"):
+        _run(gh, eph, FakeHttp(gh), managed_build=True)
+    assert gh.commits == []  # stopped before opening anything
+
+
+def test_an_image_not_built_by_ephemera_fails_the_managed_journey():
+    gh = FakeGitHub()
+    eph = FakeEphemera(gh)
+    eph.builds = lambda env_id: [{"commit_sha": gh.commits[-1], "status": "succeeded",
+                                  "images": {"web": "ghcr.io/acme/app:" + gh.commits[-1]}}]
+    with pytest.raises(e2e.JourneyFailed, match="was not built by Ephemera"):
+        _run(gh, eph, FakeHttp(gh), managed_build=True)
+    assert gh.deleted_branches == ["e2e/first-preview-t1"]
+
+
+def test_a_compose_file_without_a_ci_built_service_is_reported():
+    with pytest.raises(e2e.JourneyFailed, match="update the e2e script"):
+        e2e.without_ci_image("services:\n  web:\n    image: nginx\n")

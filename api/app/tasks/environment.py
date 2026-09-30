@@ -8,6 +8,8 @@ These tasks handle async operations for Kubernetes environments including:
 """
 
 import logging
+import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, List
 
@@ -33,6 +35,20 @@ logger = logging.getLogger(__name__)
 
 STATUS_CONTEXT = "ephemera/environment"
 FOOTER = "\n---\n*Powered by Ephemera*\n"
+
+
+class DeployFailed(RuntimeError):
+    """A deploy that ended without a Ready preview, with the build's category when a managed build stopped it."""
+
+    def __init__(self, message: str, category: Optional[str] = None, build_id: Optional[int] = None):
+        super().__init__(message)
+        self.category, self.build_id = category, build_id
+
+
+def _dashboard_url(environment_id: int) -> Optional[str]:
+    """The preview's details in the dashboard, served from the API's own origin."""
+    m = re.match(r"^(https?://[^/]+)", settings.github_oauth_redirect_uri or "")
+    return f"{m.group(1)}/dashboard#environment-{environment_id}" if m else None
 
 
 class DatabaseTask(Task):
@@ -122,12 +138,27 @@ def _run_deployment(
     if latest:
         deployment_crud.update_deployment_status(db, latest, DeploymentStatus.IN_PROGRESS)
 
+    posted = {"text": None, "at": 0.0}
+
     def stage(name: str, detail: Optional[str] = None) -> None:
         # Progress for the dashboard; never allowed to break a deploy.
         try:
             environment_crud.set_stage(db, environment_id, name, detail, commit_sha=commit_sha)
         except Exception as e:
             logger.warning(f"Could not record stage {name} for environment {environment_id}: {e}")
+        if name == "building" and detail:
+            # The PR's status follows a managed build: "Building web (1m 20s)",
+            # posted when the step changes and every 30 seconds otherwise.
+            step = re.sub(r"\s*\([^)]*\)$", "", detail)
+            if step != posted["text"] or time.monotonic() - posted["at"] >= 30:
+                posted.update(text=step, at=time.monotonic())
+                try:
+                    github_service.update_pr_status(
+                        installation_id=installation_id, repo_full_name=repo_full_name, commit_sha=commit_sha,
+                        state="pending", description=detail[:140], context=STATUS_CONTEXT,
+                        target_url=_dashboard_url(environment_id))
+                except Exception as e:
+                    logger.warning(f"Could not post build progress for environment {environment_id}: {e}")
 
     # Private images: the repository's registry credentials become the
     # namespace's pull Secret, referenced by every Deployment. Removing the
@@ -154,7 +185,7 @@ def _run_deployment(
         return {"success": False, "build_wait": build.wait, "commit_sha": commit_sha}
     if build is not None and build.error:
         result = {"success": False, "compose_found": True, "error": build.error, "services": [],
-                  "service_urls": {}, "build_category": build.category}
+                  "service_urls": {}, "build_category": build.category, "build_id": build.build_id}
     else:
         stage("deploying", "Reading docker-compose.yml and applying the services")
         if build is not None:
@@ -403,6 +434,53 @@ def _notify(
         github_service.post_comment_to_pr(installation_id, repo_full_name, pr_number, comment)
 
 
+_BUILD_STATUS = {
+    "build_step_failed": "Build failed",
+    "build_dockerfile_missing": "Build failed: Dockerfile not found",
+    "build_timeout": "Build took too long and was stopped",
+    "build_limit": "Out of build minutes for this month",
+    "build_unsupported": "Can't build this commit",
+    "build_source": "Couldn't fetch this commit to build it",
+    "build_platform": "Build couldn't run (Ephemera's side)",
+    "build_no_slot": "Build couldn't run (Ephemera's side)",
+}
+
+
+def _build_notice(db: Session, error: DeployFailed, environment_id: int, commit_sha: str) -> Optional[tuple]:
+    """(state, description, comment) when a managed build stopped the deploy, else None."""
+    category = error.category
+    if not category or not category.startswith("build_"):
+        return None
+    link = _dashboard_url(environment_id)
+    open_it = f"[Open the preview on the Ephemera dashboard]({link})" if link else "Open the preview on the Ephemera dashboard"
+    if category == "build_fork_pending":
+        return ("pending", "Waiting for a collaborator to approve the build",
+                f"""## Ephemera: build needs approval
+
+{error}
+
+{open_it} and click **Approve build** (people with write access to this repository).{FOOTER}""")
+    excerpt = ""
+    if error.build_id and category in ("build_step_failed", "build_dockerfile_missing", "build_timeout"):
+        from app.models import Build
+
+        build = db.get(Build, error.build_id)
+        # A ~~~ fence: build output often contains backticks.
+        text_ = managed_builds.failure_excerpt(build).replace("~~~", "~ ~ ~") if build else ""
+        if text_:
+            excerpt = f"\n<details>\n<summary>End of the build log</summary>\n\n~~~\n{text_[-3000:]}\n~~~\n</details>\n"
+    retry = ("Retry from the dashboard; this was not caused by your repository."
+             if category in ("build_platform", "build_no_slot", "build_source") else "Fix the cause and push a new commit.")
+    comment = f"""## Ephemera: build failed
+
+Ephemera could not build commit `{commit_sha[:7]}`, so the preview was not updated.
+
+**{error}**
+{excerpt}
+{open_it} for the whole build log. {retry}{FOOTER}"""
+    return "failure", _BUILD_STATUS.get(category, "Build failed"), comment
+
+
 def _provision_body(
     self,
     environment_id: int,
@@ -469,7 +547,8 @@ def _provision_body(
             return {"success": False, "environment_id": environment_id, "skipped": "pull request closed"}
 
         if not result.get("success"):
-            raise RuntimeError(result.get("error") or "Application deployment failed")
+            raise DeployFailed(result.get("error") or "Application deployment failed",
+                               result.get("build_category"), result.get("build_id"))
 
         environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.READY)
         logger.info(f"Environment {environment_id} provisioned successfully")
@@ -499,6 +578,11 @@ Your preview environment has been created!
         environment_crud.update_environment_status(
             self.db, environment, EnvironmentStatus.FAILED, error_message=str(e)
         )
+        notice = _build_notice(self.db, e, environment_id, commit_sha) if isinstance(e, DeployFailed) else None
+        if notice:
+            _notify(installation_id, repo_full_name, pr_number, commit_sha, notice[0], notice[1], notice[2],
+                    target_url=_dashboard_url(environment_id))
+            return {"success": False, "environment_id": environment_id, "error": str(e)}
         comment = f"""## Ephemera Environment Failed
 
 Failed to create preview environment.
@@ -656,7 +740,8 @@ def _update_body(
             _report_not_deployed(installation_id, repo_full_name, commit_sha, "pull request closed")
             return {"success": False, "environment_id": environment_id, "skipped": "pull request closed"}
         if not result.get("success"):
-            raise RuntimeError(result.get("error") or "Application deployment failed")
+            raise DeployFailed(result.get("error") or "Application deployment failed",
+                               result.get("build_category"), result.get("build_id"))
 
         environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.READY)
         logger.info(f"Environment {environment_id} redeployed at {commit_sha[:8]}")
@@ -686,6 +771,11 @@ Redeployed at `{commit_sha[:8]}`.
         environment_crud.update_environment_status(
             self.db, environment, EnvironmentStatus.FAILED, error_message=str(e)
         )
+        notice = _build_notice(self.db, e, environment_id, commit_sha) if isinstance(e, DeployFailed) else None
+        if notice:
+            _notify(installation_id, repo_full_name, pr_number, commit_sha, notice[0], notice[1], notice[2],
+                    target_url=_dashboard_url(environment_id))
+            return {"success": False, "environment_id": environment_id, "error": str(e)}
         comment = f"""## Ephemera Environment Update Failed
 
 Could not redeploy at `{commit_sha[:8]}`.

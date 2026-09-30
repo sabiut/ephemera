@@ -372,6 +372,17 @@ def _delete_source(gcp: GCPClient, name: str) -> None:
         logger.warning(f"Could not delete build source {name}: {e}")
 
 
+def failure_excerpt(build: Build, lines: int = 25) -> str:
+    """The end of the failed service's part of the log, for a PR comment."""
+    tail = (build.log_tail or "").splitlines()
+    failed = next((n for n, p in (build.services or {}).items() if p == "failed"), None)
+    if failed:
+        mine = [l.split(":", 1)[1].strip() if ":" in l else l for l in tail
+                if f'"{failed}"' in l.split(":", 1)[0]]
+        tail = mine or tail
+    return "\n".join(tail[-lines:])
+
+
 def _record(db: Session, row: Build, **fields) -> None:
     for k, v in fields.items():
         setattr(row, k, v)

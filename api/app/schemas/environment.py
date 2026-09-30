@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from datetime import datetime
 from typing import Any, Dict, Optional
 from app.models.deployment import DeploymentStatus
@@ -95,3 +95,28 @@ class DeploymentResponse(BaseModel):
     updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class BuildResponse(BaseModel):
+    """One managed build of a preview's commit (docs/managed-builds.md)."""
+    id: int
+    commit_sha: str
+    status: str                                  # queued, building, succeeded, failed, timeout, cancelled
+    services: Optional[Dict[str, str]] = None    # service -> queued, building, done, failed, cancelled
+    images: Optional[Dict[str, str]] = None
+    failure_category: Optional[str] = None
+    log_tail: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    # failure_detail is left out on purpose: it holds Google's raw errors.
+    log_object: Optional[str] = Field(default=None, exclude=True)
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def has_log(self) -> bool:
+        """The whole log can be downloaded (GET .../builds/{id}/log)."""
+        return bool(self.log_object)

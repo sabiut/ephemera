@@ -9,7 +9,9 @@ push updates the same link to the new commit; closing the pull request
 removes the preview. With --protected, it also checks that an anonymous
 visitor is sent to sign-in, and that a reviewer who signs in (through the
 same code-and-callback the browser uses, issued by the API) sees the app and
-then the updated commit.
+then the updated commit. With --managed-build, the pull request removes the
+web service's CI-built image from docker-compose.yml, as a repository moving
+to managed builds does, and checks that Ephemera built each commit itself.
 
 Unit tests cannot see integration failures (webhook delivery, image builds,
 ingress, certificates, DNS); this does. It creates a branch and a pull
@@ -21,12 +23,17 @@ Environment:
   EPHEMERA_TOKEN   an API token created in the Ephemera dashboard
 Usage:
   python scripts/e2e/first_preview.py --repo sabiut/ephemera-test-app \\
-      --ephemera https://ephemera-api.devpreview.app [--protected]
+      --ephemera https://ephemera-api.devpreview.app [--protected] [--managed-build]
+
+--managed-build needs managed builds turned on for the repository (the
+server's MANAGED_BUILDS_ENABLED and allowlist, then Enable managed builds on
+its Repositories page).
 """
 
 import argparse
 import base64
 import os
+import re
 import sys
 import time
 import uuid
@@ -98,6 +105,10 @@ class GitHub:
             body["sha"] = existing.json()["sha"]
         return self._call("PUT", f"/contents/{path}", json=body)["commit"]["sha"]
 
+    def get_file(self, ref: str, path: str) -> str:
+        body = self._call("GET", f"/contents/{path}", params={"ref": ref})
+        return base64.b64decode(body["content"]).decode()
+
     def open_pr(self, branch: str, base: str, title: str) -> int:
         return self._call("POST", "/pulls", json={"title": title, "head": branch, "base": base,
                                                   "body": "Opened by Ephemera's end-to-end test; closed automatically."})["number"]
@@ -142,8 +153,29 @@ class Ephemera:
         """Sign-in links for a protected preview (one per public service)."""
         return self._call("POST", f"/api/v1/environments/{environment_id}/access-link")["links"]
 
+    def build_plan(self) -> Dict[str, Any]:
+        return self._call("GET", f"/api/v1/repositories/{self.repo}/build-plan")
+
+    def builds(self, environment_id: int) -> List[Dict[str, Any]]:
+        return self._call("GET", f"/api/v1/environments/{environment_id}/builds")
+
     def set_protected(self, value: bool) -> Dict[str, Any]:
         return self._call("PUT", f"/api/v1/repositories/{self.repo}/settings", json={"protect_previews": value})
+
+
+# The test app's web service, built by its own CI for every commit. The
+# managed-build journey drops the CI image and passes the commit as the
+# build argument its page shows, so Ephemera builds it instead.
+_CI_BUILT_WEB = re.compile(r"^(?P<i>[ \t]+)build: \.\n(?P=i)image: \S*\$\{EPHEMERA_SHA\}\S*\n", re.M)
+
+
+def without_ci_image(compose: str) -> str:
+    changed, n = _CI_BUILT_WEB.subn(lambda m: (f"{m['i']}build:\n{m['i']}  context: .\n{m['i']}  args:\n"
+                                               f"{m['i']}    GIT_SHA: ${{EPHEMERA_SHA}}\n"), compose, count=1)
+    if not n:
+        raise JourneyFailed("the test repository's docker-compose.yml has no 'build: .' service with a "
+                            "${EPHEMERA_SHA} image to hand over to managed builds; update the e2e script")
+    return changed
 
 
 def wait_for(what: str, probe: Callable[[], Optional[Any]], timeout: float, poll: float,
@@ -159,7 +191,8 @@ def wait_for(what: str, probe: Callable[[], Optional[Any]], timeout: float, poll
     raise JourneyFailed(f"Timed out after {timeout:.0f}s waiting for {what}")
 
 
-def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, timeout: float = 900,
+def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, managed_build: bool = False,
+                timeout: float = 900,
                 poll: float = 10, sleep: Callable[[float], None] = time.sleep,
                 clock: Callable[[], float] = time.monotonic, run_id: Optional[str] = None,
                 journey: Optional[Journey] = None) -> Journey:
@@ -206,6 +239,15 @@ def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, tim
             return "configuration checks passed"
         journey.run("Setup check passes", check)
 
+        if managed_build:
+            def managed_on():
+                plan = eph.build_plan()
+                if not plan.get("managed_builds_enabled"):
+                    raise JourneyFailed(f"managed builds are off for {eph.repo}: turn them on (server allowlist, then "
+                                        "Enable managed builds on its Repositories page) before this run")
+                return f"on (confirmed by {plan.get('confirmed_by') or 'a collaborator'})"
+            journey.run("Managed builds on", managed_on)
+
         if protected:
             restore_protection = bool(eph.settings().get("protect_previews"))
             journey.run("Protection on", lambda: (eph.set_protected(True), "collaborators only")[1])
@@ -216,6 +258,9 @@ def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, tim
         def open_pr():
             nonlocal pr
             gh.create_branch(branch, gh.branch_sha(base))
+            if managed_build:
+                gh.put_file(branch, "docker-compose.yml", without_ci_image(gh.get_file(base, "docker-compose.yml")),
+                            f"E2E {run_id}: let Ephemera build web")
             state["sha"] = gh.put_file(branch, "e2e/run.txt", f"run {run_id} commit 1\n", f"E2E {run_id}: first commit")
             pr = gh.open_pr(branch, base, f"E2E first preview {run_id}")
             return f"PR #{pr} at {state['sha'][:7]}"
@@ -229,6 +274,18 @@ def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, tim
             not_verified = [s for s, r in (env.get("readiness") or {}).items() if not r.get("verified")]
             return f"{state['url']}" + (f" (not verified: {', '.join(not_verified)})" if not_verified else "")
         journey.run("Preview ready", first_ready)
+
+        def built_by_ephemera(sha: str) -> str:
+            build = next((b for b in eph.builds(state["env_id"]) if b.get("commit_sha") == sha), None)
+            if not build or build.get("status") != "succeeded":
+                raise JourneyFailed(f"no successful managed build of {sha[:7]}: {build}")
+            image = (build.get("images") or {}).get("web", "")
+            if "/ephemera-builds-" not in image or not image.endswith(sha):
+                raise JourneyFailed(f"web was not built by Ephemera from {sha[:7]} (image {image!r})")
+            return f"web built in {build.get('duration_seconds')}s as {image.split('/')[-2]}/web"
+
+        if managed_build:
+            journey.run("Built by Ephemera", lambda: built_by_ephemera(state["sha"]))
 
         if protected:
             def anonymous():
@@ -262,7 +319,8 @@ def run_journey(gh: GitHub, eph: Ephemera, http, *, protected: bool = False, tim
             # Protected: the reviewer's session carries on to the new commit.
             wait(f"{state['url']} to serve {state['sha2'][:7]}", serves(state["url"], state["sha2"]), 180)
             who = "the signed-in reviewer now sees" if protected else "same link now serves"
-            return f"{who} {state['sha2'][:7]}"
+            rebuilt = f"; {built_by_ephemera(state['sha2'])}" if managed_build else ""
+            return f"{who} {state['sha2'][:7]}{rebuilt}"
         journey.run("Push updates the preview", push)
 
         def close():
@@ -300,6 +358,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--repo", default="sabiut/ephemera-test-app")
     parser.add_argument("--ephemera", default="https://ephemera-api.devpreview.app")
     parser.add_argument("--protected", action="store_true", help="also check that protected links ask for sign-in")
+    parser.add_argument("--managed-build", action="store_true",
+                        help="hand the web service to managed builds in the PR and check Ephemera built it")
     parser.add_argument("--timeout", type=float, default=900, help="seconds to wait for each preview to become Ready")
     args = parser.parse_args(argv)
 
@@ -316,7 +376,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     code = 0
     try:
         run_journey(GitHub(github_http, args.repo), Ephemera(ephemera_http, args.ephemera, args.repo),
-                    plain_http, protected=args.protected, timeout=args.timeout, journey=journey)
+                    plain_http, protected=args.protected, managed_build=args.managed_build,
+                    timeout=args.timeout, journey=journey)
     except JourneyFailed as e:
         print(f"FAILED: {e}", file=sys.stderr)
         code = 1
