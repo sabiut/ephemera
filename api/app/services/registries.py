@@ -13,12 +13,13 @@ import json
 import re
 from typing import Dict, List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.encryption import get_encryption
 from app.models import RegistryCredential
 
-PULL_SECRET_NAME = "ephemera-registry"
+PULL_SECRET_NAME = "ephemera-registry"  # deployment.PULL_SECRET must match
 
 # Docker Hub is written many ways; the kubelet looks it up under this key.
 DOCKER_HUB = "https://index.docker.io/v1/"
@@ -58,7 +59,7 @@ def display_registry(registry: str) -> str:
 
 def credentials_for(db: Session, repository_full_name: str) -> List[RegistryCredential]:
     return (db.query(RegistryCredential)
-              .filter(RegistryCredential.repository_full_name == repository_full_name)
+              .filter(func.lower(RegistryCredential.repository_full_name) == repository_full_name.lower())
               .order_by(RegistryCredential.registry).all())
 
 
@@ -68,7 +69,7 @@ def upsert(db: Session, repository_full_name: str, registry: str, username: str,
     if not username.strip() or not secret.strip():
         raise InvalidRegistry("Both a username and a token are required")
     existing = (db.query(RegistryCredential)
-                  .filter(RegistryCredential.repository_full_name == repository_full_name,
+                  .filter(func.lower(RegistryCredential.repository_full_name) == repository_full_name.lower(),
                           RegistryCredential.registry == registry).first())
     record = existing or RegistryCredential(repository_full_name=repository_full_name, registry=registry)
     record.username = username.strip()

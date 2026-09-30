@@ -185,6 +185,10 @@ async def create_environment(
         if pr is None:
             raise HTTPException(status_code=404, detail=f"Pull request #{env_data.pr_number} not found in {repo}")
 
+        # Store GitHub's spelling of the repository, not the caller's: the
+        # protection setting, registry tokens and limit are keyed on it.
+        repo = pr.repository_full_name or repo
+
         if not _may_provision(installation_id, repo, current_user, pr.author_id):
             raise HTTPException(
                 status_code=403,

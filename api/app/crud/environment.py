@@ -1,4 +1,4 @@
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 from typing import List, Optional, Set
 from datetime import datetime, timezone
@@ -11,6 +11,15 @@ ACTIVE_STATUSES = (
     EnvironmentStatus.READY,
     EnvironmentStatus.UPDATING,
 )
+
+
+def same_repository(column, repository_full_name: str):
+    """
+    GitHub repository names are case-insensitive. Exact comparison let a
+    preview requested as "Acme/App" miss the repository's protection setting,
+    registry tokens and preview limit, all stored under "acme/app".
+    """
+    return func.lower(column) == (repository_full_name or "").lower()
 
 
 def visible_environments(db: Session, user: User, admin: bool, repo_names: Optional[Set[str]] = None) -> Query:
@@ -27,7 +36,7 @@ def visible_environments(db: Session, user: User, admin: bool, repo_names: Optio
         return query
     condition = Environment.owner_id == user.id
     if repo_names:
-        condition = or_(condition, Environment.repository_full_name.in_(sorted(repo_names)))
+        condition = or_(condition, func.lower(Environment.repository_full_name).in_(sorted({r.lower() for r in repo_names})))
     return query.filter(condition)
 
 
@@ -43,7 +52,7 @@ def list_environments(
     """List visible environments, newest first, with optional filters."""
     query = visible_environments(db, user, admin, repo_names)
     if repository:
-        query = query.filter(Environment.repository_full_name == repository)
+        query = query.filter(same_repository(Environment.repository_full_name, repository))
     if active_only:
         query = query.filter(Environment.status.in_(ACTIVE_STATUSES))
     return query.order_by(Environment.created_at.desc(), Environment.id.desc()).limit(limit).all()
@@ -79,7 +88,7 @@ def get_environment_by_pr(
 ) -> Optional[Environment]:
     """Get environment by repository and PR number"""
     return db.query(Environment).filter(
-        Environment.repository_full_name == repository_full_name,
+        same_repository(Environment.repository_full_name, repository_full_name),
         Environment.pr_number == pr_number
     ).first()
 
@@ -92,7 +101,7 @@ def get_environment_by_namespace(db: Session, namespace: str) -> Optional[Enviro
 def get_environments_by_repo(db: Session, repository_full_name: str) -> List[Environment]:
     """Get all environments for a repository"""
     return db.query(Environment).filter(
-        Environment.repository_full_name == repository_full_name
+        same_repository(Environment.repository_full_name, repository_full_name)
     ).all()
 
 

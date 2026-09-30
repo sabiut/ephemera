@@ -148,8 +148,13 @@ def _run_deployment(
     )
 
     if result.get("applied_count"):
-        # The routes now carry this repository's access setting.
-        environment_crud.set_access_applied(db, environment_id, "protected" if protected else "public")
+        # Only claim the access setting is in effect if every route applied:
+        # a failed Ingress may still be the old, public one. "failed" makes
+        # the dashboard say so, and the next settings save retries it.
+        route_failures = [m for m in result.get("failed_manifests") or []
+                          if m.startswith("Ingress/") or m.startswith(f"Service/{preview_access.AUTH_SERVICE}")]
+        environment_crud.set_access_applied(
+            db, environment_id, "failed" if route_failures else ("protected" if protected else "public"))
 
     if result.get("ai_generated"):
         logger.info("Deployment used AI-generated manifests")
@@ -707,6 +712,9 @@ def apply_preview_access(self, environment_id: int):
     return _locked(self, environment_id, None, None, lambda: _apply_access_body(self, environment_id))
 
 
+ACCESS_RETRIES = 3  # after 10s, 20s and 40s
+
+
 def _apply_access_body(self, environment_id: int):
     from app.services.provisioning import HOLDS_RESOURCES
     environment = environment_crud.get_environment(self.db, environment_id)
@@ -715,6 +723,14 @@ def _apply_access_body(self, environment_id: int):
     protected = preview_access.is_protected(self.db, environment.repository_full_name)
     wanted = "protected" if protected else "public"
     if not deployment_service.apply_access(environment.namespace, protected):
+        # Retry a few times (the API may be briefly unavailable); after that,
+        # record the failure so the dashboard stops saying "applying" and
+        # offers Try again, instead of the change silently stopping.
+        retries = _retries_so_far(self)
+        if retries < ACCESS_RETRIES:
+            raise self.retry(countdown=10 * 2 ** retries, max_retries=ACCESS_RETRIES)
+        environment_crud.set_access_applied(self.db, environment_id, "failed")
+        logger.error(f"Could not make {environment.namespace} {wanted} after {ACCESS_RETRIES} retries")
         return {"success": False, "environment_id": environment_id, "error": "could not change access"}
     environment_crud.set_access_applied(self.db, environment_id, wanted)
     logger.info(f"{environment.namespace} is now {wanted}")

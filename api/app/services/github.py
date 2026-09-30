@@ -64,6 +64,8 @@ class PullRequestInfo:
     author_id: int
     author_login: str
     author_avatar_url: Optional[str]
+    # The repository's name as GitHub spells it (the caller may not).
+    repository_full_name: Optional[str] = None
 
 
 # Status updates and comments are the only way a developer hears about a
@@ -237,6 +239,7 @@ class GitHubService:
             author_id=pr.user.id,
             author_login=pr.user.login,
             author_avatar_url=pr.user.avatar_url,
+            repository_full_name=pr.base.repo.full_name,
         )
 
     def is_collaborator(self, installation_id: int, repo_full_name: str, login: str) -> Optional[bool]:

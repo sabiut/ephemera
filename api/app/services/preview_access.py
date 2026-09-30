@@ -21,6 +21,7 @@ Ephemera's own readiness probe passes with a header keyed to the host.
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -42,7 +43,7 @@ _LIVE = (EnvironmentStatus.PENDING, EnvironmentStatus.PROVISIONING, EnvironmentS
 
 def is_protected(db: Session, repository_full_name: str) -> bool:
     row = (db.query(RepositorySettings)
-             .filter(RepositorySettings.repository_full_name == repository_full_name).first())
+             .filter(func.lower(RepositorySettings.repository_full_name) == repository_full_name.lower()).first())
     return bool(row and row.protect_previews)
 
 
@@ -68,8 +69,22 @@ def host_of(url: str) -> Optional[str]:
     return parsed.hostname.lower() if parsed.scheme in ("http", "https") and parsed.hostname else None
 
 
+PROBE_TTL = 120
+
+
 def probe_value(host: str) -> str:
-    return signing.digest("preview-probe", host.lower())
+    """
+    A readiness-probe pass for one host, valid for two minutes. It reaches the
+    preview application with the request, so it must not be a standing
+    bypass: a fixed per-host value would let anyone who saw it in the app's
+    logs open a protected preview for good.
+    """
+    return signing.sign("preview-probe", {"h": host.lower()}, PROBE_TTL)
+
+
+def probe_valid(value: Optional[str], host: str) -> bool:
+    claims = signing.unsign("preview-probe", value)
+    return bool(claims) and claims.get("h") == host.lower()
 
 
 def mint_code(namespace: str, user_id: int) -> str:

@@ -392,6 +392,7 @@ class AIDeploymentService:
                 "services": services,
                 "skipped_services": skipped,
                 "service_urls": service_urls,
+                "failed_manifests": list(failed),
                 "readiness_paths": {n: p for n, cfg in ((compose_doc or {}).get("services") or {}).items()
                                     if (p := readiness_path(cfg if isinstance(cfg, dict) else {}))},
                 "ai_generated": True,

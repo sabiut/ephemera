@@ -242,7 +242,7 @@ def test_the_readiness_probe_proves_itself(monkeypatch):
 
     monkeypatch.setattr(httpx, "get", get)
     assert probe_urls({"web": f"https://{HOST}"}, timeout_seconds=1) == {}
-    assert seen[preview_access.PROBE_HEADER] == preview_access.probe_value(HOST)
+    assert preview_access.probe_valid(seen[preview_access.PROBE_HEADER], HOST)
 
 
 # ------------------------------------------------------------------ the setting
