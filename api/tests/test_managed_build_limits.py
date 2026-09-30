@@ -183,7 +183,7 @@ class PruneGCP:
 
     def delete_object(self, bucket, name):
         self.objects_deleted.append((bucket, name))
-        self.objects[(bucket, name.split("/")[0] + "/")].remove(name)
+        self.objects[(bucket, "")].remove(name)
 
 
 def test_images_no_preview_runs_are_untagged(db_session, environment, on):
@@ -214,8 +214,8 @@ def test_a_slot_is_wiped_then_released_only_when_empty(db_session, on):
     row.build_slot, row.managed_builds_enabled = 0, False
     db_session.commit()
     gcp = PruneGCP(packages={"ephemera-builds-0": ["web", "worker"]},
-                   objects={("proj-ephemera-build-logs", "slot-0/"): ["slot-0/log-cb-1.txt"],
-                            ("proj-ephemera-build-source", "slot-0/"): ["slot-0/9-abc.tgz"]})
+                   objects={("proj-ephemera-build-logs-0", ""): ["log-cb-1.txt"],
+                            ("proj-ephemera-build-source-0", ""): ["9-abc.tgz"]})
     first = mb.prune(db_session, gcp)
     assert first["slots_released"] == [] and row.build_slot == 0     # deleting; confirmed next run
     assert len(gcp.packages_deleted) == 2 and len(gcp.objects_deleted) == 2
@@ -242,7 +242,7 @@ def test_nothing_to_prune_makes_no_google_calls(db_session, on):
 def test_source_is_deleted_once_the_build_has_it(db_session, environment, on):
     gcp = FakeGCP(["SUCCESS"], final={"web": "SUCCESS"})
     outcome = _build(db_session, environment, gcp)
-    assert gcp.deleted == [("proj-ephemera-build-source", f"slot-0/{outcome.build_id}-{SHA}.tgz")]
+    assert gcp.deleted == [("proj-ephemera-build-source-0", f"{outcome.build_id}-{SHA}.tgz")]
 
 
 def test_the_build_plan_shows_the_months_minutes(client, auth_headers, db_session, monkeypatch, on):
@@ -266,3 +266,13 @@ def test_the_build_plan_shows_the_months_minutes(client, auth_headers, db_sessio
     usage = client.get("/api/v1/repositories/acme/app/build-plan", headers=auth_headers).json()["usage"]
     assert usage["minutes_used"] == 3 and usage["minutes_limit"] == 300
     repo_access.clear_cache()
+
+
+def test_a_build_that_cannot_start_leaves_no_source_behind(db_session, environment, on):
+    class Refused(FakeGCP):
+        def create_build(self, body):
+            raise mb.GCPError("400 invalid bucket", 400)
+    gcp = Refused(["SUCCESS"])
+    outcome = _build(db_session, environment, gcp)
+    assert outcome.category == "build_platform"
+    assert gcp.deleted == [("proj-ephemera-build-source-0", f"{outcome.build_id}-{SHA}.tgz")]

@@ -98,10 +98,12 @@ def _build(db, env, gcp, superseded=lambda: None, stages=None, compose=COMPOSE):
 def test_the_build_request_builds_each_service_as_the_slot_only(monkeypatch):
     monkeypatch.setattr(settings, "gcp_project_id", "proj")
     compose = {"services": {"web": {"build": {"context": "./web", "args": {"GIT_SHA": SHA, "PRICE": "$5", "FROM_ENV": None}}}}}
-    body = mb.build_request(detect(COMPOSE).buildable, compose, 3, SHA, REPO, 42, "slot-3/42.tgz")
+    body = mb.build_request(detect(COMPOSE).buildable, compose, 3, SHA, REPO, 42, "42.tgz")
     assert body["serviceAccount"] == "projects/proj/serviceAccounts/ephemera-build-slot-3@proj.iam.gserviceaccount.com"
-    assert body["source"] == {"storageSource": {"bucket": "proj-ephemera-build-source", "object": "slot-3/42.tgz"}}
-    assert body["logsBucket"] == "gs://proj-ephemera-build-logs/slot-3" and body["timeout"] == "900s"
+    assert body["source"] == {"storageSource": {"bucket": "proj-ephemera-build-source-3", "object": "42.tgz"}}
+    # The slot's own logs bucket: Cloud Build checks access to the whole bucket, so
+    # there is no shared bucket with per-slot folders.
+    assert body["logsBucket"] == "gs://proj-ephemera-build-logs-3" and body["timeout"] == "900s"
     assert body["images"] == [f"us-central1-docker.pkg.dev/proj/ephemera-builds-3/web:{SHA}",
                               f"us-central1-docker.pkg.dev/proj/ephemera-builds-3/worker:{SHA}"]
     web = body["steps"][0]["args"]
@@ -182,13 +184,13 @@ def test_a_successful_build_reports_progress_and_the_images(db_session, environm
     assert outcome.error is None and outcome.duration_seconds == 80
     assert outcome.images == {"web": f"us-central1-docker.pkg.dev/proj/ephemera-builds-0/web:{SHA}",
                               "worker": f"us-central1-docker.pkg.dev/proj/ephemera-builds-0/worker:{SHA}"}
-    assert gcp.uploaded == [("proj-ephemera-build-source", f"slot-0/{outcome.build_id}-{SHA}.tgz")]
+    assert gcp.uploaded == [("proj-ephemera-build-source-0", f"{outcome.build_id}-{SHA}.tgz")]
     details = [d for n, d in stages if n == "building"]
     assert details[0].startswith("Fetching the source") and "Waiting for a build machine" in details[1]
     assert details[2].startswith("Building web (")
     row = db_session.get(Build, outcome.build_id)
     assert (row.status, row.cloud_build_id, row.duration_seconds) == ("succeeded", "cb-1", 80)
-    assert row.log_object == "slot-0/log-cb-1.txt" and row.images == outcome.images
+    assert row.log_object == "log-cb-1.txt" and row.images == outcome.images
 
 
 def test_a_newer_commit_cancels_the_build(db_session, environment, on):

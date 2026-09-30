@@ -14,7 +14,7 @@ calls build_commit before applying the services:
    (the deploy is rescheduled) while the repository's own build or the
    platform's build capacity is in use;
 4. fetch the commit's source through the GitHub App, strip GitHub's top
-   directory, and upload it under the slot's prefix of the source bucket;
+   directory, and upload it to the slot's own source bucket;
 5. run one Cloud Build as the slot's account: a docker build per service,
    pushed to the slot's registry as <service>:<commit>;
 6. poll it, cancelling if a newer commit arrives, and record the result,
@@ -81,12 +81,14 @@ class BuildOutcome:
 
 # ------------------------------------------------------------------ names (modules/managed-builds)
 
-def source_bucket() -> str:
-    return f"{settings.gcp_project_id}-ephemera-build-source"
+def source_bucket(slot: int) -> str:
+    """The slot's own bucket for commit tarballs (modules/managed-builds: one per slot)."""
+    return f"{settings.gcp_project_id}-ephemera-build-source-{slot}"
 
 
-def logs_bucket() -> str:
-    return f"{settings.gcp_project_id}-ephemera-build-logs"
+def logs_bucket(slot: int) -> str:
+    """The slot's own bucket for build logs."""
+    return f"{settings.gcp_project_id}-ephemera-build-logs-{slot}"
 
 
 def slot_account(slot: int) -> str:
@@ -306,11 +308,11 @@ def build_request(services: List[PlannedService], compose: Dict[str, Any], slot:
         steps.append({"id": svc.name, "name": DOCKER, "args": [_escape(a) for a in args]})
         images.append(image)
     return {
-        "source": {"storageSource": {"bucket": source_bucket(), "object": source_object}},
+        "source": {"storageSource": {"bucket": source_bucket(slot), "object": source_object}},
         "steps": steps,
         "images": images,
         "serviceAccount": f"projects/{settings.gcp_project_id}/serviceAccounts/{slot_account(slot)}",
-        "logsBucket": f"gs://{logs_bucket()}/slot-{slot}",
+        "logsBucket": f"gs://{logs_bucket(slot)}",
         "options": {"logging": "GCS_ONLY"},
         "timeout": f"{settings.managed_builds_timeout_seconds}s",
         "tags": ["ephemera", f"slot-{slot}"],
@@ -364,10 +366,10 @@ def _failure(build: Dict[str, Any], log: str) -> "tuple[str, str]":
     return "build_step_failed", f"Building {service} failed: {last[:300]}" if last else f"Building {service} failed."
 
 
-def _delete_source(gcp: GCPClient, name: str) -> None:
+def _delete_source(gcp: GCPClient, slot: int, name: str) -> None:
     """The commit's source is only needed while the build fetches it; the bucket's 1-day rule is the backstop."""
     try:
-        gcp.delete_object(source_bucket(), name)
+        gcp.delete_object(source_bucket(slot), name)
     except GCPError as e:
         logger.warning(f"Could not delete build source {name}: {e}")
 
@@ -485,23 +487,29 @@ def build_commit(
 
     names = ", ".join(s.name for s in services)
     stage("building", f"Fetching the source of {commit_sha[:7]}")
-    source_object = f"slot-{slot}/{record.id}-{commit_sha}.tgz"
+    source_object = f"{record.id}-{commit_sha}.tgz"
+    uploaded = False
     try:
         with tempfile.TemporaryDirectory(prefix="ephemera-build-") as workdir:
             path = source(installation_id, repository_full_name, commit_sha, workdir)
-            gcp.upload(source_bucket(), source_object, path)
+            gcp.upload(source_bucket(slot), source_object, path)
+            uploaded = True
         body = build_request(services, compose, slot, commit_sha, repository_full_name, record.id, source_object)
         cloud_id = gcp.create_build(body)
     except SourceError as e:
         return fail("build_source", f"Ephemera could not fetch this commit to build it: {e}.")
     except BuildRefused as e:
+        if uploaded:
+            _delete_source(gcp, slot, source_object)
         return fail("build_unsupported", f"Managed builds can't build this commit: {e}.")
     except GCPError as e:
+        if uploaded:
+            _delete_source(gcp, slot, source_object)
         logger.error(f"Managed build for {repository_full_name}@{commit_sha[:7]} could not start: {e}")
         return fail("build_platform", _PLATFORM_FAILURE, detail=str(e))
 
     _record(db, record, status="building", cloud_build_id=cloud_id, started_at=datetime.now(timezone.utc),
-            log_object=f"slot-{slot}/log-{cloud_id}.txt")
+            log_object=f"log-{cloud_id}.txt")
     logger.info(f"Managed build {cloud_id} (slot {slot}) started for {repository_full_name}@{commit_sha[:7]}")
     started = clock()
     deadline = started + settings.managed_builds_timeout_seconds + settings.managed_builds_queue_allowance_seconds
@@ -517,12 +525,12 @@ def build_commit(
         newer = superseded()
         if newer:
             gcp.cancel_build(cloud_id)
-            _delete_source(gcp, source_object)
+            _delete_source(gcp, slot, source_object)
             return fail("build_superseded", f"A newer commit ({newer[:7]}) arrived; this build was cancelled.",
                         status="cancelled")
         if clock() > deadline:
             gcp.cancel_build(cloud_id)
-            _delete_source(gcp, source_object)
+            _delete_source(gcp, slot, source_object)
             return fail("build_timeout", f"The build did not finish within "
                         f"{settings.managed_builds_timeout_seconds // 60} minutes and was stopped.", status="timeout")
         progress = _progress(build)
@@ -535,12 +543,12 @@ def build_commit(
             _record(db, record, services=progress)
         sleep(settings.managed_builds_poll_seconds)
 
-    _delete_source(gcp, source_object)
+    _delete_source(gcp, slot, source_object)
     begun, ended = _time(build.get("startTime")), _time(build.get("finishTime"))
     duration = int((ended - begun).total_seconds()) if begun and ended else int(clock() - started)
     outcome.duration_seconds = duration
     try:
-        log = (gcp.download(logs_bucket(), record.log_object) or b"").decode("utf-8", "replace")
+        log = (gcp.download(logs_bucket(slot), record.log_object) or b"").decode("utf-8", "replace")
     except GCPError as e:
         logger.warning(f"Could not read the log of build {cloud_id}: {e}")
         log = ""
@@ -575,8 +583,8 @@ def _images_unused(db: Session, build: Build) -> bool:
 
 def _slot_contents(gcp: GCPClient, slot: int) -> "tuple[List[str], List[tuple]]":
     packages = gcp.list_packages(f"ephemera-builds-{slot}")
-    objects = [(bucket, name) for bucket in (source_bucket(), logs_bucket())
-               for name in gcp.list_objects(bucket, f"slot-{slot}/")]
+    objects = [(bucket, name) for bucket in (source_bucket(slot), logs_bucket(slot))
+               for name in gcp.list_objects(bucket, "")]
     return packages, objects
 
 
@@ -587,9 +595,9 @@ def prune(db: Session, gcp: Optional[GCPClient] = None) -> Dict[str, Any]:
     - the tags of images no preview runs (untagged images are then removed
       by the registry's cleanup policy within a day);
     - everything in the build slot of a repository that turned managed
-      builds off: its registry's images and its prefixes of the source and
+      builds off: its registry's images and everything in its source and
       logs buckets. Only an empty slot is released for another repository,
-      whose build account can read that registry and those prefixes.
+      whose build account can read that registry and those buckets.
     """
     report: Dict[str, Any] = {"tags_deleted": 0, "slots_released": [], "errors": 0}
     if not settings.gcp_project_id:
