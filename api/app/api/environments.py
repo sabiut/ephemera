@@ -228,7 +228,7 @@ def build_log(
     if build is None or not build.log_object:
         raise HTTPException(status_code=404, detail="No log for this build")
     try:
-        log = managed_builds.gcp_client().download(managed_builds.logs_bucket(), build.log_object)
+        log = managed_builds.gcp_client().download(managed_builds.logs_bucket(build.slot), build.log_object)
     except GCPError as e:
         logger.warning(f"Could not read the log of build {build.id}: {e}")
         raise HTTPException(status_code=503, detail="The build log could not be read right now; try again shortly")

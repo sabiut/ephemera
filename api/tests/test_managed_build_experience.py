@@ -26,7 +26,7 @@ Step #0 - "web": The command '/bin/sh -c npm ci' returned a non-zero code: 1"""
 def _build_row(db, env, **fields):
     b = Build(environment_id=env.id, repository_full_name=REPO, pr_number=env.pr_number, commit_sha=SHA, slot=0,
               **{"status": "failed", "services": {"web": "failed", "worker": "queued"}, "log_tail": LOG,
-                 "log_object": "slot-0/log-cb-1.txt", "failure_detail": "403 actAs denied on proj", **fields})
+                 "log_object": "log-cb-1.txt", "failure_detail": "403 actAs denied on proj", **fields})
     db.add(b)
     db.commit()
     return b
@@ -133,7 +133,7 @@ def test_the_whole_log_downloads(client, auth_headers, db_session, environment, 
 
     class Logs:
         def download(self, bucket, name):
-            assert name == "slot-0/log-cb-1.txt"
+            assert (bucket, name) == (f"{settings.gcp_project_id}-ephemera-build-logs-0", "log-cb-1.txt")
             return b"the whole log\n"
     monkeypatch.setattr(mb, "gcp_client", lambda: Logs())
     r = client.get(f"/api/v1/environments/{environment.id}/builds/{b.id}/log", headers=auth_headers)

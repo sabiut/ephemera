@@ -2,9 +2,14 @@
 # (docs/managed-builds.md). A build runs a stranger's Dockerfile, and any
 # build step can obtain its service account's token from the metadata
 # server, so every repository builds as its own identity that can only:
-#   - read its own source prefix in the source bucket,
-#   - write its own log prefix in the logs bucket,
+#   - read its own source bucket,
+#   - write its own logs bucket,
 #   - push to its own image registry.
+#
+# Buckets are per slot, not one shared bucket with per-prefix conditions:
+# Cloud Build checks that the build's account can access the logs bucket
+# itself (storage.buckets.get) before it starts, which prefix conditions
+# can't grant without exposing the other slots' objects.
 #
 # Those identities come from a fixed pool of slots created here. The worker
 # that starts builds (the controller) may act as the slot accounts and
@@ -20,9 +25,10 @@ resource "google_project_service" "cloudbuild" {
 
 # ------------------------------------------------------------------ buckets
 
-# Commit tarballs, uploaded by the worker as slot-<n>/<build-id>.tgz. Short-lived.
+# Per slot: commit tarballs, uploaded by the worker as <build-id>-<commit>.tgz. Short-lived.
 resource "google_storage_bucket" "source" {
-  name                        = "${var.project_id}-ephemera-build-source"
+  count                       = var.build_slots
+  name                        = "${var.project_id}-ephemera-build-source-${count.index}"
   project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
@@ -30,6 +36,8 @@ resource "google_storage_bucket" "source" {
   force_destroy               = true
   labels                      = var.labels
 
+  # Commit tarballs are deleted once the build has fetched them; this is
+  # the backstop.
   lifecycle_rule {
     condition {
       age = 1
@@ -40,10 +48,9 @@ resource "google_storage_bucket" "source" {
   }
 }
 
-# Build logs, written by Cloud Build under slot-<n>/ and shown by Ephemera,
-# so users never need Google Cloud access to read them.
 resource "google_storage_bucket" "logs" {
-  name                        = "${var.project_id}-ephemera-build-logs"
+  count                       = var.build_slots
+  name                        = "${var.project_id}-ephemera-build-logs-${count.index}"
   project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
@@ -84,7 +91,8 @@ resource "google_project_iam_member" "controller_builds" {
 }
 
 resource "google_storage_bucket_iam_member" "controller_source" {
-  bucket = google_storage_bucket.source.name
+  count  = var.build_slots
+  bucket = google_storage_bucket.source[count.index].name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.controller.email}"
 }
@@ -92,7 +100,8 @@ resource "google_storage_bucket_iam_member" "controller_source" {
 # Reads build logs, and deletes a slot's logs before the slot is given to
 # another repository (whose build account could otherwise read them).
 resource "google_storage_bucket_iam_member" "controller_logs" {
-  bucket = google_storage_bucket.logs.name
+  count  = var.build_slots
+  bucket = google_storage_bucket.logs[count.index].name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.controller.email}"
 }
@@ -151,30 +160,35 @@ resource "google_artifact_registry_repository_iam_member" "controller_slot_admin
   member     = "serviceAccount:${google_service_account.controller.email}"
 }
 
-# The slot reads only its own source tarballs...
+# The slot reads its own source bucket and writes its own logs bucket.
+# Legacy Bucket Reader adds storage.buckets.get (and listing), which Cloud
+# Build checks on the logs bucket before it starts a build.
 resource "google_storage_bucket_iam_member" "slot_source" {
   count  = var.build_slots
-  bucket = google_storage_bucket.source.name
+  bucket = google_storage_bucket.source[count.index].name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.slot[count.index].email}"
-
-  condition {
-    title      = "slot-${count.index}-only"
-    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.source.name}/objects/slot-${count.index}/\")"
-  }
 }
 
-# ...and writes only its own logs.
+resource "google_storage_bucket_iam_member" "slot_source_bucket" {
+  count  = var.build_slots
+  bucket = google_storage_bucket.source[count.index].name
+  role   = "roles/storage.legacyBucketReader"
+  member = "serviceAccount:${google_service_account.slot[count.index].email}"
+}
+
 resource "google_storage_bucket_iam_member" "slot_logs" {
   count  = var.build_slots
-  bucket = google_storage_bucket.logs.name
+  bucket = google_storage_bucket.logs[count.index].name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.slot[count.index].email}"
+}
 
-  condition {
-    title      = "slot-${count.index}-logs-only"
-    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.logs.name}/objects/slot-${count.index}/\")"
-  }
+resource "google_storage_bucket_iam_member" "slot_logs_bucket" {
+  count  = var.build_slots
+  bucket = google_storage_bucket.logs[count.index].name
+  role   = "roles/storage.legacyBucketReader"
+  member = "serviceAccount:${google_service_account.slot[count.index].email}"
 }
 
 # The controller may start builds as a slot account (and as nothing else).
