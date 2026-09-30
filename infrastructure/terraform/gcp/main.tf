@@ -154,6 +154,21 @@ module "artifact_registry" {
   labels          = local.common_labels
 }
 
+# Managed builds (docs/managed-builds.md): build slots, buckets and the
+# worker's build identity. Nothing builds until the application uses them.
+module "managed_builds" {
+  source = "./modules/managed-builds"
+  providers = {
+    google      = google
+    google-beta = google-beta
+  }
+
+  project_id  = var.gcp_project_id
+  region      = var.gcp_region
+  build_slots = var.build_slots
+  labels      = local.common_labels
+}
+
 # Static IP for Ingress LoadBalancer
 resource "google_compute_address" "ingress_ip" {
   name         = "ephemera-ingress-ip"

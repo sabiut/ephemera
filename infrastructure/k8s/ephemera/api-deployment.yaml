@@ -182,8 +182,12 @@ kind: ServiceAccount
 metadata:
   name: ephemera-api
   namespace: ephemera-system
-  annotations:
-    iam.gke.io/gcp-service-account: gke-kubectl-runner@ephemera-dev-2025.iam.gserviceaccount.com
+  # No Google identity. This used to name gke-kubectl-runner (the deploy
+  # workflow's account: cluster admin, storage admin, registry admin, Secret
+  # Manager). No Workload Identity binding existed, so pods got nothing, but
+  # one added binding would have made every API and worker pod that
+  # powerful. Managed builds give the worker its own narrow identity instead
+  # (terraform/gcp/modules/managed-builds).
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

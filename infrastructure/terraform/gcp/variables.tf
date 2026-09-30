@@ -96,3 +96,9 @@ variable "redis_memory_gb" {
 # NOTE: Application secrets (GitHub credentials, API keys, etc.) are managed
 # by kubectl in the GitHub Actions pipeline, not by Terraform.
 # See .github/workflows/deploy.yml "Apply Kubernetes manifests" step.
+
+variable "build_slots" {
+  description = "Repositories that can have managed builds at once (one build identity and image registry each)"
+  type        = number
+  default     = 10
+}
