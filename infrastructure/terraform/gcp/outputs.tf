@@ -123,3 +123,21 @@ output "ingress_ip" {
   description = "Static IP address for ingress controller"
   value       = google_compute_address.ingress_ip.address
 }
+
+output "managed_builds_controller" {
+  description = "Service account the worker uses to start managed builds"
+  value       = module.managed_builds.controller_service_account
+}
+
+output "managed_builds_source_bucket" {
+  value = module.managed_builds.source_bucket
+}
+
+output "managed_builds_logs_bucket" {
+  value = module.managed_builds.logs_bucket
+}
+
+output "managed_builds_slots" {
+  description = "Build slots (service account and registry each), as JSON for the application's configuration"
+  value       = jsonencode(module.managed_builds.slots)
+}

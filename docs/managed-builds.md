@@ -64,7 +64,7 @@ PR webhook ──> build planner ──> build queue (per repository: 1 running,
 ```
 
 - **Source.** The worker downloads the commit's tarball through the GitHub App (Contents: read, which it already has) and uploads it to a builds bucket. The build itself never receives a GitHub credential.
-- **Where images go.** One Artifact Registry repository **per connected repository** (named from a hash of `owner/name`). The GKE nodes' service account already reads every Artifact Registry repository in the project, so built images need no pull Secret.
+- **Where images go.** Each connected repository with managed builds is assigned a **build slot**: an Artifact Registry repository and a build service account, created by Terraform (`modules/managed-builds`, `build_slots`, 10 for the beta). Ephemera records the assignment; a slot is wiped before it is reassigned. The GKE nodes' service account already reads every Artifact Registry repository in the project, so built images need no pull Secret.
 - **Deploy integration.** `deploy_application` already interpolates `${EPHEMERA_SHA}` and knows which services are build-only. With managed builds enabled, a build-only service's image becomes the built image for that commit, and the "Nothing to preview / No image to run" blockers no longer apply to it. Services that name their own `image:` are untouched.
 - **Queue.** A `builds` table (repository, PR, commit, service, status, Cloud Build id, started/finished, minutes, log object, failure category). The environment lock already serialises work per preview; a per-repository build lock bounds concurrency there, and a global cap bounds the platform.
 
@@ -72,11 +72,11 @@ PR webhook ──> build planner ──> build queue (per repository: 1 running,
 
 Managed builds run strangers' code with an identity that can push images. The design assumes a malicious `Dockerfile`.
 
-- **Per-repository build identity.** Each connected repository gets its own build service account, with `artifactregistry.writer` on **its own** Artifact Registry repository and nothing else: no project roles, no access to other repositories' images or caches, no Secret Manager, no GKE. A build step can reach the metadata server and obtain that account's token; per-repository accounts are what make that token useless against other customers. (Default quota is 100 service accounts per project; the beta stays under it, and the plan for more is a quota increase or per-installation accounts.)
+- **Per-repository build identity.** Each repository builds as its slot's service account, which can only push to **its own** registry, read **its own** prefix of the source bucket and write **its own** prefix of the logs bucket (IAM conditions): no project roles, no access to other repositories' images, caches or source, no Secret Manager, no GKE. A build step can reach the metadata server and obtain that account's token; per-repository accounts are what make that token useless against other customers.
 - **No other credentials in the build.** The source arrives as a tarball; the build has no GitHub token, no registry token, no Ephemera secrets. Build arguments come only from the confirmed plan.
 - **Isolation of caches and artifacts.** Layer caches live in the repository's own registry. Source tarballs are per build, with a one-day lifecycle. Nothing is shared between repositories.
 - **Forks.** A PR from a fork is not built automatically: fork code could overwrite the repository's own commit images (its identity can push to that registry). A collaborator clicks **Approve build** for that PR's current commit; a new push needs approval again. Previews of same-repository branches build automatically.
-- **Least privilege for Ephemera itself.** The worker gets permission to create builds and to impersonate (`iam.serviceAccountUser`) only the build service accounts it created, not arbitrary ones.
+- **Least privilege for Ephemera itself.** The worker (its own Kubernetes service account, bound by Workload Identity to `ephemera-builds-controller`) may create and cancel builds, act as **only the slot accounts**, manage only the slot registries, and use the two build buckets. It holds no IAM-admin role, so it cannot create identities or grant itself anything; that is why slots are created by Terraform rather than on demand.
 - **Supply chain.** Base images are pulled as written; the beta does not pin or scan them. Built images carry labels for repository, commit and build id.
 
 ## Limits and cleanup (required before the beta opens)
@@ -107,7 +107,7 @@ The beta succeeds if most new users reach a working preview without help and fas
 
 ## Rollout
 
-1. **Infrastructure** (Terraform): builds bucket with lifecycle, Cloud Build API, the worker's permission to create per-repository service accounts and registries, registry cleanup policies.
+1. **Infrastructure** (Terraform, `modules/managed-builds`): Cloud Build API; source (1-day) and logs (30-day) buckets; the controller identity for the worker; `build_slots` slots, each a service account plus a registry with a cleanup policy and conditional bucket access.
 2. **Detection and confirmation**: build plan API and the Repositories page table; nothing builds yet.
 3. **Build pipeline** behind an allowlist of repositories: queue, source upload, Cloud Build, status polling, logs, deploy integration.
 4. **Limits**: cancellation, per-repository and platform caps, monthly minutes, image cleanup, fork approval.
