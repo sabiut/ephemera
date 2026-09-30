@@ -1,0 +1,54 @@
+name: End-to-end first preview
+
+# Runs the journey a new user takes against the live platform: repository
+# connected, setup check, a PR gets a Ready preview serving its commit, a push
+# updates it, closing the PR removes it (scripts/e2e/first_preview.py). It
+# creates and cleans up a branch and PR in the test repository, so it only
+# runs on demand, when the cluster is up.
+#
+# Secrets:
+#   E2E_GITHUB_TOKEN  fine-grained token for the test repository with
+#                     Contents and Pull requests: read and write
+#   EPHEMERA_TOKEN    an API token from the Ephemera dashboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Test repository
+        default: sabiut/ephemera-test-app
+      protected:
+        description: Also check that protected links ask for sign-in
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-first-preview
+  cancel-in-progress: false
+
+jobs:
+  journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install httpx
+
+      - name: Run the first-preview journey
+        env:
+          GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          EPHEMERA_TOKEN: ${{ secrets.EPHEMERA_TOKEN }}
+          REPOSITORY: ${{ inputs.repository }}
+          PROTECTED: ${{ inputs.protected }}
+        run: |
+          args=(--repo "$REPOSITORY")
+          if [ "$PROTECTED" = "true" ]; then args+=(--protected); fi
+          python scripts/e2e/first_preview.py "${args[@]}"
