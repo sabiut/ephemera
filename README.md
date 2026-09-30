@@ -217,6 +217,16 @@ DeepSeek is by far the cheapest option: a preview plan is a few thousand tokens,
 
 For the GKE workflow, set repository **variables** `AI_PROVIDER` (for example `deepseek`) and optionally `DEEPSEEK_MODEL`, and a repository **secret** `DEEPSEEK_API_KEY`. The next deploy picks them up.
 
+## End-to-end test
+
+`scripts/e2e/first_preview.py` runs the journey a new user takes against the live platform and checks what they would see: the test repository is connected and its setup check passes; a new pull request gets a preview that becomes Ready and serves that pull request's commit; a push updates the same link to the new commit; closing the pull request removes the preview (reason `closed`) and the link stops serving it. `--protected` also checks that an anonymous visitor is sent to GitHub sign-in (the repository's setting is restored afterwards). It always closes its pull request and deletes its branch, even when a step fails, and prints a table of steps and timings.
+
+Run it from the **End-to-end first preview** workflow (manual dispatch; needs the secrets `E2E_GITHUB_TOKEN`, a fine-grained token for the test repository with Contents and Pull requests write access, and `EPHEMERA_TOKEN`), or locally:
+
+```bash
+GITHUB_TOKEN=... EPHEMERA_TOKEN=... python scripts/e2e/first_preview.py --repo sabiut/ephemera-test-app
+```
+
 ## API Endpoints
 
 ### Environments
