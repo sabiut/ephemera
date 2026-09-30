@@ -58,6 +58,15 @@ class BuildPlan:
     services: List[PlannedService] = field(default_factory=list)
 
     @property
+    def can_enable(self) -> bool:
+        """
+        Something to build now, or services the repository's CI builds today
+        (turning managed builds on, then removing their image: lines, is how
+        a repository moves off its CI images).
+        """
+        return self.status == "ok" or any(s.kind == "ci_image" for s in self.services)
+
+    @property
     def buildable(self) -> List[PlannedService]:
         return [s for s in self.services if s.kind == "build"]
 
@@ -67,7 +76,7 @@ class BuildPlan:
                        for s in self.buildable), key=lambda s: s["name"])
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"status": self.status, "message": self.message,
+        return {"status": self.status, "message": self.message, "can_enable": self.can_enable,
                 "services": [asdict(s) for s in self.services], "signature": self.signature()}
 
 

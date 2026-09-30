@@ -319,7 +319,7 @@ def put_build_plan(owner: str, repo: str, body: BuildPlanChange, db: Session = D
             raise HTTPException(status_code=403, detail="Managed builds are in a limited beta and not open to this "
                                                         "repository yet.")
         plan = _detect_plan(installed, None)
-        if plan.status != "ok":
+        if not plan.can_enable:
             raise HTTPException(status_code=409, detail=plan.message)
         if body.signature is not None and body.signature != plan.signature():
             raise HTTPException(status_code=409, detail="The build plan changed since it was shown. Review it and "

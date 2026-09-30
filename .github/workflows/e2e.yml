@@ -22,6 +22,10 @@ on:
         description: Also check protected links (anonymous redirect, signed-in reviewer)
         type: boolean
         default: false
+      managed_build:
+        description: Hand web to managed builds in the PR and check Ephemera built it (managed builds must be on)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -49,7 +53,9 @@ jobs:
           EPHEMERA_TOKEN: ${{ secrets.EPHEMERA_TOKEN }}
           REPOSITORY: ${{ inputs.repository }}
           PROTECTED: ${{ inputs.protected }}
+          MANAGED_BUILD: ${{ inputs.managed_build }}
         run: |
           args=(--repo "$REPOSITORY")
           if [ "$PROTECTED" = "true" ]; then args+=(--protected); fi
+          if [ "$MANAGED_BUILD" = "true" ]; then args+=(--managed-build); fi
           python scripts/e2e/first_preview.py "${args[@]}"

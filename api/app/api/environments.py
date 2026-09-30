@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, is_admin
@@ -11,7 +12,7 @@ from app.crud import user as user_crud
 from app.database import get_db
 from app.models import User
 from app.crud import deployment as deployment_crud
-from app.schemas.environment import DeploymentResponse, EnvironmentCreate, EnvironmentResponse
+from app.schemas.environment import BuildResponse, DeploymentResponse, EnvironmentCreate, EnvironmentResponse
 from app.services import repo_access
 from app.services.github import GitHubUnavailable, github_service
 from app.services.provisioning import HOLDS_RESOURCES, EnvironmentRequest, PreviewLimitReached, request_environment
@@ -190,6 +191,51 @@ async def list_environment_deployments(
     if not environment:
         raise HTTPException(status_code=404, detail="Environment not found")
     return deployment_crud.get_deployments_by_environment(db, environment_id, limit=limit)
+
+
+@router.get("/{environment_id}/builds", response_model=List[BuildResponse])
+def list_environment_builds(
+    environment_id: int,
+    limit: int = Query(5, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The preview's managed builds, newest first, with the end of each log."""
+    from app.models import Build
+
+    environment = _visible_or_404(db, current_user, environment_id)
+    return (db.query(Build).filter(Build.environment_id == environment.id)
+            .order_by(Build.id.desc()).limit(limit).all())
+
+
+@router.get("/{environment_id}/builds/{build_id}/log", response_class=PlainTextResponse)
+def build_log(
+    environment_id: int,
+    build_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    A build's whole log, as Cloud Build wrote it, so nobody needs access to
+    Google Cloud. Kept for 30 days (the logs bucket's rule).
+    """
+    from app.models import Build
+    from app.services import managed_builds
+    from app.services.gcp import GCPError
+
+    environment = _visible_or_404(db, current_user, environment_id)
+    build = db.query(Build).filter(Build.id == build_id, Build.environment_id == environment.id).first()
+    if build is None or not build.log_object:
+        raise HTTPException(status_code=404, detail="No log for this build")
+    try:
+        log = managed_builds.gcp_client().download(managed_builds.logs_bucket(), build.log_object)
+    except GCPError as e:
+        logger.warning(f"Could not read the log of build {build.id}: {e}")
+        raise HTTPException(status_code=503, detail="The build log could not be read right now; try again shortly")
+    if log is None:
+        raise HTTPException(status_code=404, detail="This build's log is no longer kept (logs are kept for 30 days)")
+    return PlainTextResponse(log.decode("utf-8", "replace"), headers={
+        "Content-Disposition": f'attachment; filename="build-{build.id}-{build.commit_sha[:7]}.log"'})
 
 
 @router.get("/namespace/{namespace}", response_model=EnvironmentResponse)

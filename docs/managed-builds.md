@@ -1,6 +1,6 @@
 # Managed builds: design
 
-Status: design agreed (decisions below). Steps 1 (infrastructure), 2 (detection and confirmation), 3 (the build pipeline, for allowlisted repositories) and 4 (limits) are merged. Next: the experience (step 5).
+Status: design agreed (decisions below). Steps 1 (infrastructure), 2 (detection and confirmation), 3 (the build pipeline, for allowlisted repositories), 4 (limits) and 5 (the experience) are merged. Next: the beta (step 6), after a live run of the end-to-end test with --managed-build.
 
 ## Why
 
@@ -134,6 +134,11 @@ The beta succeeds if most new users reach a working preview without help and fas
      - wipes the slot of a repository that turned managed builds off (the registry's packages, and its prefixes of the source and logs buckets) and releases it only once a later run finds it empty, so the next repository's build account can never read what the previous one left. The controller therefore has `storage.objectAdmin` on the logs bucket. Turning managed builds off also removes the images of that repository's running previews; they keep running until their pods restart.
    - **Diagnoses** for build failures, with buttons: Approve build (fork), See build minutes (limit), Check this PR's configuration (missing Dockerfile).
 5. **Experience**: Building stage, PR status and comment, build diagnoses with actions, log view; extend the end-to-end test with a managed-build variant.
+   - **PR status** follows the build ("Waiting for a build machine", "Building web (1m 20s)"). It is posted when the step changes and at most every 30 seconds otherwise, linking to the preview's details (`/dashboard#environment-<id>`).
+   - **PR comments**: a failed build gets "Ephemera: build failed" with the reason, the end of the failing service's log in a collapsed block, and a link to the whole log. Problems on Ephemera's side say to retry, not to fix the repository. A fork waiting for approval gets a **pending** status and "build needs approval" with the dashboard link, not a failure. Raw Google errors never appear.
+   - **Dashboard**: the preview's details show the latest build (per-service progress, time, the end of the log, open when it failed, and **Download full log**, `GET /api/v1/environments/{id}/builds/{build_id}/log`, kept 30 days). The build list is at `GET /api/v1/environments/{id}/builds`. The stepper keeps "Building images" once done, and build failures offer **View build log**.
+   - **Moving off CI images**: a repository whose services are built by its CI today (`image:` with `${EPHEMERA_SHA}`) can turn managed builds on. It then removes those `image:` lines (passing the commit as a build arg if the app shows it), and from then on Ephemera builds those services; the CI workflow and registry token can go.
+   - **End-to-end**: `scripts/e2e/first_preview.py --managed-build` (the workflow's `managed_build` input) does exactly that in its pull request on the test app. It checks that each commit was built by Ephemera into the slot registry and that the preview serves it. It needs managed builds on for the repository first.
 6. **Beta**: open to new installations, with the metrics page.
 
 Each step is one or more PRs; this is several weeks of work, not a single change.

@@ -99,7 +99,9 @@ const views = ['overview', 'environments', 'repositories', 'credentials', 'token
 
 function navigate() {
     const hash = window.location.hash.slice(1) || 'overview';
-    const view = views.includes(hash) ? hash : 'overview';
+    // #environment-<id>: a preview's details, as linked from its PR.
+    const deep = hash.match(/^environment-(\d+)$/);
+    const view = deep ? 'environments' : views.includes(hash) ? hash : 'overview';
 
     // Update active view
     views.forEach(v => {
@@ -116,7 +118,8 @@ function navigate() {
     document.getElementById('sidebar').classList.remove('open');
 
     // Load data for view
-    loadView(view);
+    const loaded = loadView(view);
+    if (deep) Promise.resolve(loaded).then(() => openEnvironment(Number(deep[1])));
 }
 
 window.addEventListener('hashchange', navigate);
@@ -183,6 +186,10 @@ function startAutoRefresh() {
         try {
             if (detailEnvId !== null) {
                 await loadEnvironments();
+                const env = cachedEnvironments.find(e => e.id === detailEnvId);
+                if (env && (env.stage === 'building' || (detailBuilds[0] && ['queued', 'building'].includes(detailBuilds[0].status)))) {
+                    await loadDetailBuilds(detailEnvId);
+                }
                 renderEnvironmentDetail();
             }
             if (hash === 'overview') {
@@ -339,7 +346,8 @@ function stepperHTML(env) {
     const status = (env.status || '').toLowerCase();
     const steps = ['queued'];
     if (status === 'provisioning' || status === 'pending' || env.stage === 'preparing') steps.push('preparing');
-    if (env.stage === 'building') steps.push('building');  // managed builds
+    const built = env.id === detailEnvId && (detailBuilds || []).some(b => b.commit_sha === env.commit_sha);
+    if (env.stage === 'building' || built) steps.push('building');  // managed builds
     steps.push('deploying', 'waiting_for_image', 'starting', 'checking_https', 'ready');
     const current = steps.indexOf(env.stage);
     return `<ol class="stepper">${steps.map((step, i) => {
@@ -451,6 +459,7 @@ function envTableHTML(envs) {
 
 let detailEnvId = null;
 let detailDeployments = [];
+let detailBuilds = [];  // managed builds of the open preview, newest first
 
 // Backticks in diagnosis text mark names (services, files); show them as code.
 function richText(text) {
@@ -462,12 +471,49 @@ async function openEnvironment(id) {
     detailDeployments = [];
     renderEnvironmentDetail();
     openModal('envDetailModal');
+    detailBuilds = [];
     try {
         detailDeployments = await apiCall(`/api/v1/environments/${id}/deployments?limit=5`) || [];
     } catch (e) {
         detailDeployments = null;
     }
+    await loadDetailBuilds(id);
     if (detailEnvId === id) renderEnvironmentDetail();
+}
+
+async function loadDetailBuilds(id) {
+    try {
+        const builds = await apiCall(`/api/v1/environments/${id}/builds?limit=3`) || [];
+        if (detailEnvId === id) detailBuilds = builds;
+    } catch (e) {
+        if (detailEnvId === id) detailBuilds = [];
+    }
+}
+
+const BUILD_STATES = {
+    queued: ['Queued', 'badge-pending'], building: ['Building', 'badge-provisioning'],
+    succeeded: ['Built', 'badge-ready'], failed: ['Failed', 'badge-failed'],
+    timeout: ['Timed out', 'badge-failed'], cancelled: ['Cancelled', 'badge-pending'],
+};
+
+// The latest managed build: per-service progress, time, the end of the log
+// (open when it failed) and the whole log to download.
+function buildHTML(env) {
+    const b = detailBuilds && detailBuilds[0];
+    if (!b) return '';
+    const [label, cls] = BUILD_STATES[b.status] || [b.status, 'badge-pending'];
+    const took = b.duration_seconds ? ` in ${formatDuration(b.duration_seconds)}` : '';
+    const services = Object.entries(b.services || {}).map(([name, state]) =>
+        `<li><span class="mono">${escapeHtml(name)}</span> <span class="text-muted">${escapeHtml(state)}</span></li>`).join('');
+    const failed = ['failed', 'timeout'].includes(b.status);
+    const tail = b.log_tail
+        ? `<details class="tech-details" id="buildLog" ${failed ? 'open' : ''}><summary>End of the build log</summary><pre>${escapeHtml(b.log_tail)}</pre></details>` : '';
+    const download = b.has_log
+        ? `<a class="btn btn-ghost btn-sm" href="/api/v1/environments/${env.id}/builds/${b.id}/log">Download full log</a>` : '';
+    const older = b.commit_sha !== env.commit_sha ? ` <span class="text-muted">(commit ${escapeHtml(b.commit_sha.slice(0, 7))})</span>` : '';
+    return `<div class="section-label">Build${older}</div>
+        <div class="detail-note"><span class="badge ${cls}">${label}</span>${escapeHtml(took)} ${download}
+        ${services ? `<ul class="history" style="margin-top:8px;">${services}</ul>` : ''}</div>${tail}`;
 }
 
 function closeEnvironmentDetail() {
@@ -549,7 +595,7 @@ function renderEnvironmentDetail() {
             <span style="flex:1;min-width:200px;">Removed <strong>${escapeHtml(label)}</strong> if there are no new commits before then, to free resources.</span>
             <button class="btn btn-ghost btn-sm" onclick="keepEnvironment(${env.id}, this)">Keep available</button></div>`;
     }
-    body.innerHTML = prTitle + meta + main + expiry + history;
+    body.innerHTML = prTitle + meta + main + buildHTML(env) + expiry + history;
 
     const recreatable = status === 'destroyed' && ['expired', 'stopped'].includes(env.removal_reason);
     const retry = status === 'failed'
@@ -632,6 +678,9 @@ async function runRecovery(envId, index) {
         } catch (e) {
             showToast('Could not approve: ' + e.message, 'error');
         }
+    } else if (action.kind === 'build_log') {
+        const log = document.getElementById('buildLog');
+        if (log) { log.open = true; log.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     } else if (action.kind === 'managed_builds') {
         await openRepositoryView(fullName);
         document.getElementById('repoBuildsCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1032,10 +1081,14 @@ function buildPlanHTML(owner, repo, p) {
     } else if (p.managed_builds_enabled) {
         state = `<p class="reg-help">On. Ephemera will build the services marked above from each pull request's commit; no CI workflow or registry token is needed for them.</p>
             <p style="padding:0 20px 16px;"><button class="btn btn-danger btn-sm" onclick="setManagedBuilds('${o}', '${r}', false, this)">Turn off</button></p>`;
-    } else if (p.status === 'ok' && !p.allowlisted) {
+    } else if (p.can_enable && !p.allowlisted) {
         state = `<p class="reg-help">Managed builds are in a limited beta and not open to this repository yet. Until then, build images in your CI (see the setup guide).</p>`;
     } else if (p.status === 'ok') {
         state = `<p class="reg-help">Check the table: Ephemera will build each service marked "Ephemera builds it" from the pull request's own commit, privately, instead of your CI. Services your CI already builds are left alone.</p>
+            <p style="padding:0 20px 16px;"><button class="btn btn-primary btn-sm" onclick="setManagedBuilds('${o}', '${r}', true, this)">Enable managed builds</button></p>`;
+    } else if (p.can_enable) {
+        const ci = p.services.filter(s => s.kind === 'ci_image').map(s => s.name);
+        state = `<p class="reg-help">Your CI builds ${ci.map(escapeHtml).join(', ')} today. To let Ephemera build ${ci.length === 1 ? 'it' : 'them'} instead: enable managed builds, then remove the image: line from ${ci.length === 1 ? 'that service' : 'those services'} in docker-compose.yml (pass the commit with build args such as <code>GIT_SHA: \${EPHEMERA_SHA}</code> if your app shows it). You can then delete the CI workflow and registry token.</p>
             <p style="padding:0 20px 16px;"><button class="btn btn-primary btn-sm" onclick="setManagedBuilds('${o}', '${r}', true, this)">Enable managed builds</button></p>`;
     } else {
         state = `<p class="reg-help">${escapeHtml(p.message)}</p>`;

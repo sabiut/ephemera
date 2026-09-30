@@ -74,7 +74,9 @@ _ACTIONS: Dict[str, List[Dict[str, str]]] = {
     "capacity": [USAGE],
     "build_fork_pending": [{"kind": "approve_build", "label": "Approve build"}],
     "build_limit": [{"kind": "managed_builds", "label": "See build minutes"}],
-    "build_dockerfile_missing": [CHECK],
+    "build_dockerfile_missing": [CHECK, {"kind": "build_log", "label": "View build log"}],
+    "build_step_failed": [{"kind": "build_log", "label": "View build log"}],
+    "build_timeout": [{"kind": "build_log", "label": "View build log"}],
     "build_unsupported": [{"kind": "managed_builds", "label": "See the build plan"}],
 }
 
