@@ -1,6 +1,6 @@
 # Managed builds: design
 
-Status: proposal for review. No code yet.
+Status: design agreed (decisions below). No code yet.
 
 ## Why
 
@@ -23,13 +23,13 @@ Not in the beta (explained to the user before a build, not discovered after one 
 
 - Build secrets (private npm/pip registries, `RUN --mount=type=secret`, SSH forwarding). Those repositories keep using CI-built images.
 - Building from forks without a maintainer's approval (see Security).
+- Repositories without a `docker-compose.yml` (a Dockerfile alone). Compose remains the description of what a preview runs; Dockerfile-only support may follow the beta.
 - Multi-platform images; non-Docker builds (Buildpacks, Nix); monorepo path filters.
 
 ## User experience
 
 1. **Detection.** When a repository is connected (or on demand), Ephemera reads the default branch and proposes a build plan:
    - For each compose service with `build:` (context, dockerfile, target, args, as the setup guide already parses them), the service name, build context, Dockerfile path, the port from `ports:` / `EXPOSE`, and whether it is public.
-   - If there is no compose file but there is a root `Dockerfile`, a single service `web` with the Dockerfile's last `EXPOSE` port (the user can edit the port).
    - Anything unsupported is listed with its reason (build secrets, `ssh:`, `dockerfile_inline`, a Dockerfile that references a private base image the build cannot pull).
 2. **Confirmation.** The Repositories page shows the plan as a short table (service, context, Dockerfile, port, public) with **Enable managed builds**. The confirmed plan is stored per repository; changes to compose on later commits are re-detected per build and surfaced if they differ materially (new service, removed Dockerfile).
 3. **A pull request.** The deploy progress gains a **Building** stage before Deploying services, per service: queued → building (with elapsed time) → pushed. The PR status says "Building web (1m 20s)". A newer push cancels the older build.
@@ -116,9 +116,11 @@ The beta succeeds if most new users reach a working preview without help and fas
 
 Each step is one or more PRs; this is several weeks of work, not a single change.
 
-## Open questions for the owner
+## Decisions
 
-1. Is **300 build-minutes per repository per month** the right beta cap, and should it be visible on the landing page as part of "free during the beta"?
-2. Should the beta support **Dockerfile-only repositories** (no compose file), or require compose at first?
-3. Fork PRs: is **collaborator approval per commit** acceptable, or should forks simply not get managed builds in the beta?
-4. Build region: keep **us-central1** next to the cluster (cheapest egress), or allow per-installation regions later?
+Agreed with the owner on 2026-10-01:
+
+1. **Monthly build minutes:** 300 per repository per month during the beta.
+2. **Compose stays required.** Managed builds build the `build:` services of the repository's `docker-compose.yml`; repositories with only a Dockerfile are not part of the beta.
+3. **Forks:** a collaborator approves each commit of a fork's pull request (**Approve build**); a new push needs approval again.
+4. **Region:** builds run in `us-central1`, next to the cluster and its registry.
