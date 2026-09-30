@@ -470,6 +470,7 @@ function renderEnvironmentDetail() {
         <div><div class="label">Commit</div><div class="value mono"><a href="https://github.com/${escapeHtml(repo)}/commit/${escapeHtml(sha)}" target="_blank" class="text-muted">${escapeHtml(sha.slice(0, 7) || '-')}</a></div></div>
         <div><div class="label">Branch</div><div class="value mono">${escapeHtml(env.branch_name || '-')}</div></div>
         <div><div class="label">Opened by</div><div class="value">${escapeHtml(env.owner_login || '-')}</div></div>
+        <div><div class="label">Access</div><div class="value">${env.access_applied === 'protected' ? 'Collaborators only' : 'Anyone with the link'}</div></div>
         <div><div class="label">Last change</div><div class="value">${timeAgo(env.stage_started_at || env.updated_at || env.created_at)}</div></div>
     </div>`;
     const prTitle = env.pr_title ? `<p style="color:#e5e5e5;margin:0 0 16px;">${escapeHtml(env.pr_title)}</p>` : '';
@@ -837,8 +838,20 @@ function accessHTML(owner, repo, s) {
     return `<div style="padding:6px 0;">
         ${option('false', 'Anyone with the link', 'Preview links are public. Fine for open-source work and demos without real data.')}
         ${option('true', 'Collaborators only', 'Viewers sign in with GitHub; only the PR author, the repository\'s collaborators and Ephemera admins get in.')}
-    </div><p class="reg-help">Changes apply to each preview from its next deploy (push a commit, or Retry / Recreate).</p>`;
+    </div><p class="reg-help" id="repoAccessState">${accessStateText(s)}</p>`;
 }
+
+// Whether the chosen access is in effect on every running preview yet.
+function accessStateText(s) {
+    const what = s.protect_previews ? 'collaborators-only' : 'public';
+    if (!s.previews) return `No running previews. New previews will be ${what}.`;
+    if (s.previews_applied >= s.previews) {
+        return `In effect: ${s.previews === 1 ? 'the running preview is' : `all ${s.previews} running previews are`} ${what}.`;
+    }
+    return `Applying to running previews: ${s.previews_applied} of ${s.previews} ${what} so far…`;
+}
+
+let accessPoll = null;
 
 async function loadAccess(owner, repo) {
     const body = document.getElementById('repoAccessBody');
@@ -846,9 +859,30 @@ async function loadAccess(owner, repo) {
         const s = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/settings`);
         body.innerHTML = accessHTML(owner, repo, s);
         document.getElementById('repoAccessMeta').textContent = s.updated_by_login ? `Set by ${s.updated_by_login} ${timeAgo(s.updated_at)}` : '';
+        pollAccess(owner, repo, s);
     } catch (e) {
         body.innerHTML = `<div class="empty-state"><p>Could not load preview access. ${escapeHtml(e.message)}</p></div>`;
     }
+}
+
+// Until every running preview has the chosen access, check every 2 seconds
+// (for up to a minute) so the card says when the change is in effect.
+function pollAccess(owner, repo, s, started = Date.now()) {
+    if (accessPoll) clearTimeout(accessPoll);
+    if (!s.previews || s.previews_applied >= s.previews) return;
+    if (Date.now() - started > 60000) {
+        const el = document.getElementById('repoAccessState');
+        if (el) el.textContent += ' This is taking longer than usual; it finishes when the previews\' current deploys do.';
+        return;
+    }
+    accessPoll = setTimeout(async () => {
+        try {
+            const next = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/settings`);
+            const el = document.getElementById('repoAccessState');
+            if (el) el.textContent = accessStateText(next);
+            pollAccess(owner, repo, next, started);
+        } catch (e) { /* the next load retries */ }
+    }, 2000);
 }
 
 async function saveAccess(owner, repo, protect) {
@@ -857,8 +891,8 @@ async function saveAccess(owner, repo, protect) {
             method: 'PUT', body: JSON.stringify({ protect_previews: protect }),
         });
         showToast(protect
-            ? 'Previews are now collaborators-only, from each one\'s next deploy.'
-            : 'Preview links are public again, from each one\'s next deploy.');
+            ? 'Making previews collaborators-only now.'
+            : 'Making preview links public again now.');
         await loadAccess(owner, repo);
     } catch (e) {
         showToast('Could not change preview access: ' + e.message, 'error');

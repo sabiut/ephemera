@@ -71,6 +71,10 @@ class Environment(Base):
     # When someone last chose "Keep available" in the dashboard: counts as
     # activity, so the idle expiry starts again from here.
     kept_at = Column(DateTime(timezone=True), nullable=True)
+    # The access its routes actually have in the cluster: "public" or
+    # "protected". Set by deploys and by apply_preview_access, so the
+    # dashboard can tell a requested change from one in effect.
+    access_applied = Column(String, nullable=True)
 
     # Progress of the current deployment, for the dashboard: a stage key
     # (see STAGES), a human detail such as which image it waits for, when the

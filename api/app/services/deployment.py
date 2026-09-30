@@ -195,6 +195,43 @@ class DeploymentService:
         # Namespaces whose repository protects its previews, set likewise.
         self.protected: set = set()
 
+    def apply_access(self, namespace: str, protected: bool) -> bool:
+        """
+        Change a running preview's access in place, without a deploy: add or
+        remove the auth annotations on its Ingresses (a patch of those keys
+        only; null removes them) and create or delete the sign-in route.
+        Returns False if any part failed.
+        """
+        if not self.k8s.enabled:
+            return False
+        annotations = preview_access.ingress_annotations()
+        patch = {"metadata": {"annotations": {k: (v if protected else None) for k, v in annotations.items()}}}
+        try:
+            ingresses = self.k8s.networking_v1.list_namespaced_ingress(
+                namespace=namespace, label_selector=f"{MANAGED_LABEL}={MANAGED_VALUE}").items
+            hosts = []
+            for ing in ingresses:
+                if ing.metadata.name == preview_access.AUTH_SERVICE:
+                    continue
+                self.k8s.networking_v1.patch_namespaced_ingress(name=ing.metadata.name, namespace=namespace, body=patch)
+                hosts += [r.host for r in (ing.spec.rules or []) if r.host]
+        except Exception as e:
+            logger.error(f"Could not change access for {namespace}: {e}")
+            return False
+        self.set_protection(namespace, protected)
+        if protected and hosts:
+            return all(self.apply_manifest(m) for m in preview_access.auth_manifests(namespace, hosts))
+        ok = True
+        for kind, delete in (("Ingress", self.k8s.networking_v1.delete_namespaced_ingress),
+                             ("Service", self.k8s.core_v1.delete_namespaced_service)):
+            try:
+                delete(name=preview_access.AUTH_SERVICE, namespace=namespace)
+            except ApiException as e:
+                if e.status != 404:
+                    logger.error(f"Could not remove the sign-in {kind} from {namespace}: {e.status}")
+                    ok = False
+        return ok
+
     def set_protection(self, namespace: str, protected: bool) -> None:
         """Whether this namespace's previews require sign-in (see preview_access)."""
         if protected:
