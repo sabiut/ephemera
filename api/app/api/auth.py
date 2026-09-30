@@ -160,4 +160,6 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         "is_active": current_user.is_active,
         "is_admin": is_admin(current_user),
         "created_at": current_user.created_at,
+        # Platform features the dashboard shows only when they are switched on.
+        "features": {"managed_builds": get_settings().managed_builds_enabled},
     }

@@ -128,6 +128,9 @@ let environmentsError = null;
 let cachedCredentials = [];
 let cachedTokens = [];
 let isAdmin = false;
+// Platform features switched on for this server (from /auth/me).
+let features = {};
+let userInfoLoaded = Promise.resolve();
 let cachedRepositories = null;   // null: not loaded or failed
 let repositoriesError = null;
 let installUrl = null;
@@ -235,6 +238,7 @@ async function loadUserInfo() {
         const user = await apiCall('/auth/me');
         if (user) {
             isAdmin = Boolean(user.is_admin);
+            features = user.features || {};
             document.getElementById('userName').textContent = user.github_login;
             document.getElementById('userAvatar').src = user.avatar_url || '';
         }
@@ -754,6 +758,10 @@ async function selectRepository(fullName) {
     document.getElementById('repoAccessCard').hidden = false;
     loadRegistries(owner, repo);
     loadAccess(owner, repo);
+    userInfoLoaded.then(() => {  // features come from /auth/me
+        document.getElementById('repoBuildsCard').hidden = !features.managed_builds;
+        if (features.managed_builds) loadBuildPlan(owner, repo);
+    });
     document.getElementById('repoSetupTitle').textContent = `Setup check: ${fullName}`;
     document.getElementById('repoSetupRef').textContent = '';
     document.getElementById('repoSetupBody').innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
@@ -966,6 +974,86 @@ async function saveAccess(owner, repo, protect) {
         showToast('Could not change preview access: ' + e.message, 'error');
         await loadAccess(owner, repo);
     }
+}
+
+// ─── Managed builds (beta) ──────────────────────────────
+//
+// What Ephemera would build from docker-compose.yml, confirmed here before
+// anything is built. The build pipeline itself follows in a later release.
+
+const BUILD_KINDS = {
+    build: ['Ephemera builds it', 'badge-ready'],
+    ci_image: ['Your CI builds it', 'badge-pending'],
+    image: ['Ready-made image', 'badge-pending'],
+    unsupported: ['Not supported yet', 'badge-failed'],
+};
+
+let buildPlanShown = null;
+
+function buildPlanHTML(owner, repo, p) {
+    const o = escapeHtml(owner), r = escapeHtml(repo);
+    if (p.status === 'no_compose' || p.status === 'invalid') {
+        return `<div class="empty-state"><p>${escapeHtml(p.message)}</p></div>`;
+    }
+    const rows = p.services.map(s => {
+        const [label, cls] = BUILD_KINDS[s.kind] || [s.kind, 'badge-pending'];
+        const built = s.kind === 'build' || s.kind === 'unsupported';
+        const details = [...(s.reasons || []), ...(s.notes || [])];
+        return `<tr>
+            <td class="mono">${escapeHtml(s.name)}</td>
+            <td><span class="badge ${cls}">${label}</span></td>
+            <td class="mono text-muted">${built ? escapeHtml(s.context || '.') : escapeHtml(s.image || '-')}</td>
+            <td class="mono text-muted">${built ? escapeHtml(s.dockerfile || 'Dockerfile') + (s.target ? ` (${escapeHtml(s.target)})` : '') : '-'}</td>
+            <td class="mono text-muted">${s.port || '-'}</td>
+            <td class="text-muted">${s.port ? (s.public ? 'Public link' : 'Internal') : '-'}</td>
+        </tr>${details.length ? `<tr><td></td><td colspan="5" class="text-muted text-sm">${details.map(escapeHtml).join('<br>')}</td></tr>` : ''}`;
+    }).join('');
+    const table = `<table class="table"><thead><tr><th>Service</th><th>What happens</th><th>Context / image</th><th>Dockerfile</th><th>Port</th><th>Link</th></tr></thead><tbody>${rows}</tbody></table>`;
+
+    let state;
+    if (p.managed_builds_enabled && p.differences.length) {
+        state = `<p class="reg-help" style="color:#fbbf24;">docker-compose.yml on ${escapeHtml(p.ref_label)} differs from what ${escapeHtml(p.confirmed_by || 'a collaborator')} confirmed:<br>${p.differences.map(escapeHtml).join('<br>')}</p>
+            <p style="padding:0 20px 16px;display:flex;gap:8px;"><button class="btn btn-primary btn-sm" onclick="setManagedBuilds('${o}', '${r}', true, this)">Confirm the new plan</button>
+            <button class="btn btn-danger btn-sm" onclick="setManagedBuilds('${o}', '${r}', false, this)">Turn off</button></p>`;
+    } else if (p.managed_builds_enabled) {
+        state = `<p class="reg-help">On. Ephemera will build the services marked above from each pull request's commit; no CI workflow or registry token is needed for them.</p>
+            <p style="padding:0 20px 16px;"><button class="btn btn-danger btn-sm" onclick="setManagedBuilds('${o}', '${r}', false, this)">Turn off</button></p>`;
+    } else if (p.status === 'ok') {
+        state = `<p class="reg-help">Check the table: Ephemera will build each service marked "Ephemera builds it" from the pull request's own commit, privately, instead of your CI. Services your CI already builds are left alone.</p>
+            <p style="padding:0 20px 16px;"><button class="btn btn-primary btn-sm" onclick="setManagedBuilds('${o}', '${r}', true, this)">Enable managed builds</button></p>`;
+    } else {
+        state = `<p class="reg-help">${escapeHtml(p.message)}</p>`;
+    }
+    return `<p class="reg-help" style="padding-top:16px;">Detected from docker-compose.yml on ${escapeHtml(p.ref_label)}.</p>${table}${state}`;
+}
+
+async function loadBuildPlan(owner, repo) {
+    const body = document.getElementById('repoBuildsBody');
+    const meta = document.getElementById('repoBuildsMeta');
+    body.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+    meta.textContent = '';
+    try {
+        const p = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/build-plan`);
+        buildPlanShown = p.signature;
+        body.innerHTML = buildPlanHTML(owner, repo, p);
+        meta.textContent = p.managed_builds_enabled && p.confirmed_by ? `Confirmed by ${p.confirmed_by} ${timeAgo(p.confirmed_at)}` : '';
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p>Could not detect the build plan. ${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+async function setManagedBuilds(owner, repo, enabled, button) {
+    if (!enabled && !confirm(`Turn off managed builds for ${owner}/${repo}? Services with only build: will need a CI-built image again.`)) return;
+    if (button) button.disabled = true;
+    try {
+        await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/build-plan`, {
+            method: 'PUT', body: JSON.stringify(enabled ? { enabled, signature: buildPlanShown } : { enabled }),
+        });
+        showToast(enabled ? `Managed builds are on for ${owner}/${repo}.` : `Managed builds are off for ${owner}/${repo}.`);
+    } catch (e) {
+        showToast((enabled ? 'Could not enable managed builds: ' : 'Could not turn them off: ') + e.message, 'error');
+    }
+    await loadBuildPlan(owner, repo);
 }
 
 // ─── Private images (registry credentials) ──────────────
@@ -1338,7 +1426,7 @@ function escapeHtml(text) {
 // ─── Initialize ─────────────────────────────────────────
 
 window.addEventListener('DOMContentLoaded', () => {
-    loadUserInfo();
+    userInfoLoaded = loadUserInfo();
     navigate();
     startAutoRefresh();
 });
