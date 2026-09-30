@@ -688,7 +688,9 @@ async function selectRepository(fullName) {
     setupCard.hidden = false;
     pullsCard.hidden = false;
     document.getElementById('repoRegistriesCard').hidden = false;
+    document.getElementById('repoAccessCard').hidden = false;
     loadRegistries(owner, repo);
+    loadAccess(owner, repo);
     document.getElementById('repoSetupTitle').textContent = `Setup check: ${fullName}`;
     document.getElementById('repoSetupRef').textContent = '';
     document.getElementById('repoSetupBody').innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
@@ -821,6 +823,47 @@ async function copyGuide(key, button) {
     const old = button.textContent;
     button.textContent = 'Copied';
     setTimeout(() => { button.textContent = old; }, 1500);
+}
+
+// ─── Preview access (protected links) ───────────────────
+
+function accessHTML(owner, repo, s) {
+    const option = (value, title, detail) => `
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px 20px;cursor:pointer;">
+            <input type="radio" name="previewAccess" value="${value}" ${String(s.protect_previews) === value ? 'checked' : ''}
+                   onchange="saveAccess('${escapeHtml(owner)}', '${escapeHtml(repo)}', this.value === 'true')" style="margin-top:4px;">
+            <span><strong style="color:#fff;">${title}</strong><br><span class="text-muted text-sm">${detail}</span></span>
+        </label>`;
+    return `<div style="padding:6px 0;">
+        ${option('false', 'Anyone with the link', 'Preview links are public. Fine for open-source work and demos without real data.')}
+        ${option('true', 'Collaborators only', 'Viewers sign in with GitHub; only the PR author, the repository\'s collaborators and Ephemera admins get in.')}
+    </div><p class="reg-help">Changes apply to each preview from its next deploy (push a commit, or Retry / Recreate).</p>`;
+}
+
+async function loadAccess(owner, repo) {
+    const body = document.getElementById('repoAccessBody');
+    try {
+        const s = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/settings`);
+        body.innerHTML = accessHTML(owner, repo, s);
+        document.getElementById('repoAccessMeta').textContent = s.updated_by_login ? `Set by ${s.updated_by_login} ${timeAgo(s.updated_at)}` : '';
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p>Could not load preview access. ${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+async function saveAccess(owner, repo, protect) {
+    try {
+        await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/settings`, {
+            method: 'PUT', body: JSON.stringify({ protect_previews: protect }),
+        });
+        showToast(protect
+            ? 'Previews are now collaborators-only, from each one\'s next deploy.'
+            : 'Preview links are public again, from each one\'s next deploy.');
+        await loadAccess(owner, repo);
+    } catch (e) {
+        showToast('Could not change preview access: ' + e.message, 'error');
+        await loadAccess(owner, repo);
+    }
 }
 
 // ─── Private images (registry credentials) ──────────────

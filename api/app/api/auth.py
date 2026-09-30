@@ -21,10 +21,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 STATE_COOKIE = "ephemera_oauth_state"
+NEXT_COOKIE = "ephemera_login_next"
+
+
+def _safe_next(value: Optional[str]) -> Optional[str]:
+    """Where to go after signing in: only a path on this site (e.g. a protected preview's sign-in step)."""
+    if value and value.startswith("/") and not value.startswith("//") and "\\" not in value:
+        return value
+    return None
 
 
 @router.get("/github/login")
 async def github_login(
+    next: Optional[str] = None,
     oauth_service: GitHubOAuthService = Depends(get_github_oauth_service),
 ):
     """
@@ -43,6 +52,10 @@ async def github_login(
         samesite="lax",
         secure=get_settings().environment != "development",
     )
+    target = _safe_next(next)
+    if target:
+        response.set_cookie(NEXT_COOKIE, target, max_age=600, httponly=True, samesite="lax",
+                            secure=get_settings().environment != "development")
     return response
 
 
@@ -51,6 +64,7 @@ async def github_callback(
     code: str,
     state: Optional[str] = None,
     oauth_state: Optional[str] = Cookie(None, alias=STATE_COOKIE),
+    login_next: Optional[str] = Cookie(None, alias=NEXT_COOKIE),
     db: Session = Depends(get_db),
     oauth_service: GitHubOAuthService = Depends(get_github_oauth_service),
 ):
@@ -87,7 +101,7 @@ async def github_callback(
     # so a cross-site scripting bug in the dashboard cannot steal the session
     # the way it could when the token sat in localStorage.
     settings = get_settings()
-    response = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    response = RedirectResponse(url=_safe_next(login_next) or "/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         SESSION_COOKIE,
         session_token,
@@ -98,6 +112,7 @@ async def github_callback(
         path="/",
     )
     response.delete_cookie(STATE_COOKIE)
+    response.delete_cookie(NEXT_COOKIE)
     return response
 
 

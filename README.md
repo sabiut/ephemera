@@ -181,6 +181,12 @@ The cluster pulls the image, so it needs read access to the registry. For privat
 
 Supported substitutions follow docker compose: `${VAR}`, `$VAR`, `${VAR:-default}`, `${VAR-default}`, `${VAR:?message}` (fails the preview with that message), and `$$` for a literal `$`. Ephemera provides `EPHEMERA_SHA`, `EPHEMERA_SHA_SHORT` (7 characters) and `EPHEMERA_REPOSITORY` (the repository's `owner/name` in lowercase, so `image: ghcr.io/${EPHEMERA_REPOSITORY}:${EPHEMERA_SHA}` keeps working in forks); other unset variables become empty strings and are listed in the PR comment. A service with a `build:` section whose image is not tagged per commit still deploys, but the comment warns that it may not contain the PR's changes.
 
+## Protected previews
+
+Preview links are public by default. A repository can switch its previews to **collaborators only** (dashboard: Repositories, then Preview access): viewers then sign in with GitHub, and only the pull request's author, the repository's collaborators and Ephemera admins get in, the same people who see the preview in the dashboard. It applies to each preview from its next deploy.
+
+How it works: each Ingress of a protected preview carries ingress-nginx's `auth-url` annotation, so every request is checked by `/preview-auth/check`. A viewer without access is sent to `/preview-auth/start` on the Ephemera host, signs in if needed, and comes back through `/_ephemera/callback` on the preview's own host with a one-minute signed code, which becomes an HttpOnly cookie for **that host only** (a cookie shared across the base domain would reach every other preview's application). Access is re-checked on each request, so removing a collaborator takes effect within the repository-access cache time. Ephemera's readiness check passes with a keyed header. The callback route is an ExternalName Service in the preview namespace pointing at the API.
+
 ## AI manifest generation
 
 When `AI_DEPLOYMENT_ENABLED` is true, Ephemera asks a language model to turn the repository's compose file, Dockerfiles and config files into Kubernetes manifests, validates and caps the result, and falls back to the built-in compose converter on any failure. The PR comment says when the fallback ran.

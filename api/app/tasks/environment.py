@@ -27,7 +27,7 @@ from app.services.deployment import deployment_service
 from app.services.github import github_service
 from app.services.kubernetes import kubernetes_service
 from app.services.deployment import choose_primary_url, probe_urls
-from app.services import registries
+from app.services import preview_access, registries
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,7 @@ def _run_deployment(
     if not kubernetes_service.sync_pull_secret(namespace, docker_config, registries.PULL_SECRET_NAME):
         raise RuntimeError("Could not store the repository's registry credentials in the preview")
     deployment_service.set_pull_secret(namespace, registries.PULL_SECRET_NAME if docker_config else None)
+    deployment_service.set_protection(namespace, preview_access.is_protected(db, repo_full_name))
 
     stage("deploying", "Reading docker-compose.yml and applying the services")
     result = _active_deployment_service().deploy_application(

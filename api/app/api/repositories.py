@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user, is_admin
 from app.crud import environment as environment_crud
 from app.database import get_db
-from app.models import User
+from app.models import RepositorySettings, User
 from app.services import provisioning, registries, repo_access, setup_check, setup_guide
 from app.services.github import GitHubUnavailable, InstalledRepository, github_service
 
@@ -164,6 +164,44 @@ def delete_registry_credential(owner: str, repo: str, credential_id: int, db: Se
         raise HTTPException(status_code=404, detail="Registry credential not found")
     db.delete(record)
     db.commit()
+
+
+class RepositorySettingsIO(BaseModel):
+    protect_previews: bool
+    updated_by_login: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+@router.get("/repositories/{owner}/{repo}/settings", response_model=RepositorySettingsIO)
+async def get_repository_settings(owner: str, repo: str, db: Session = Depends(get_db),
+                                  current_user: User = Depends(get_current_user)):
+    installed = _accessible_repo(owner, repo, current_user)
+    row = db.query(RepositorySettings).filter(RepositorySettings.repository_full_name == installed.full_name).first()
+    if row is None:
+        return RepositorySettingsIO(protect_previews=False)
+    return RepositorySettingsIO(protect_previews=row.protect_previews, updated_by_login=row.updated_by_login,
+                                updated_at=row.updated_at)
+
+
+@router.put("/repositories/{owner}/{repo}/settings", response_model=RepositorySettingsIO)
+def put_repository_settings(owner: str, repo: str, body: RepositorySettingsIO, db: Session = Depends(get_db),
+                            current_user: User = Depends(get_current_user)):
+    """
+    protect_previews: only the PR author, the repository's collaborators and
+    admins can open its previews, after signing in with GitHub. Applies to
+    each preview from its next deploy.
+    """
+    installed = _accessible_repo(owner, repo, current_user)
+    row = db.query(RepositorySettings).filter(RepositorySettings.repository_full_name == installed.full_name).first()
+    if row is None:
+        row = RepositorySettings(repository_full_name=installed.full_name)
+        db.add(row)
+    row.protect_previews = body.protect_previews
+    row.updated_by_login = current_user.github_login
+    db.commit()
+    db.refresh(row)
+    return RepositorySettingsIO(protect_previews=row.protect_previews, updated_by_login=row.updated_by_login,
+                                updated_at=row.updated_at)
 
 
 class UsageResponse(BaseModel):
