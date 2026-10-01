@@ -138,6 +138,16 @@ spec:
             secretKeyRef:
               name: ephemera-secrets
               key: SECRET_KEY
+        # Decrypts the repositories' registry tokens into each preview's
+        # pull Secret (private images).
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ephemera-secrets
+              key: ENCRYPTION_KEY
+        # The dashboard's address, for the links in PR comments and statuses.
+        - name: GITHUB_OAUTH_REDIRECT_URI
+          value: "https://ephemera-api.devpreview.app/auth/github/callback"
         # AI Deployment config
         - name: AI_PROVIDER
           valueFrom:
