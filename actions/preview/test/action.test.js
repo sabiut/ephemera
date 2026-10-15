@@ -11,7 +11,7 @@ const SHA = 'a'.repeat(40);
 const READY = { id: 7, repository: 'acme/shop', name: 'pr-142', status: 'ready', commit: SHA,
   url: 'https://ci-pr-142-shop-x-web.devpreview.app', urls: { web: 'https://ci-pr-142-shop-x-web.devpreview.app' } };
 
-function run(script, { inputs = {}, state = {}, stdout = '', code = 0, event = {}, access = '' } = {}) {
+function run(script, { inputs = {}, state = {}, stdout = '', code = 0, event = {}, access = '', env: extra = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ephemera-action-'));
   const files = { out: path.join(dir, 'out'), st: path.join(dir, 'state'), log: path.join(dir, 'log'),
     ev: path.join(dir, 'event.json') };
@@ -20,6 +20,7 @@ function run(script, { inputs = {}, state = {}, stdout = '', code = 0, event = {
   const env = { PATH: process.env.PATH, GITHUB_OUTPUT: files.out, GITHUB_STATE: files.st, GITHUB_EVENT_PATH: files.ev,
     GITHUB_REPOSITORY: 'acme/shop', GITHUB_SHA: 'd'.repeat(40), FAKE_LOG: files.log, FAKE_STDOUT: stdout,
     FAKE_CODE: String(code), FAKE_ACCESS: access, EPHEMERA_CLI: JSON.stringify(['node', path.join(__dirname, 'fake-cli.js')]) };
+  Object.assign(env, extra);
   for (const [k, v] of Object.entries(inputs)) env[`INPUT_${k.toUpperCase()}`] = v;
   for (const [k, v] of Object.entries(state)) env[`STATE_${k}`] = v;
   const r = spawnSync('node', [path.join(HERE, script)], { env, encoding: 'utf8' });
@@ -74,11 +75,18 @@ test('a refused deploy saves no id, so the post step removes nothing', () => {
   assert.doesNotMatch(r.state, /^id=/m);
 });
 
-test('an empty token says why (forks get no secrets)', () => {
+test('no token and no OIDC says how to get either', () => {
   const r = run('main.js', { inputs: { ...BASE, token: '' } });
   assert.strictEqual(r.status, 2);
-  assert.match(r.log, /Pull requests from forks get no secrets/);
+  assert.match(r.log, /permissions id-token: write/);
   assert.strictEqual(r.calls.length, 0);
+});
+
+test('no token in a job that can use OIDC lets the CLI exchange it', () => {
+  const r = run('main.js', { inputs: { ...BASE, token: '' }, stdout: JSON.stringify(READY),
+    env: { ACTIONS_ID_TOKEN_REQUEST_URL: 'https://pipelines.actions.test/idtoken', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'x' } });
+  assert.strictEqual(r.status, 0, r.log);
+  assert.strictEqual(r.calls[0].token, '');            // the CLI sees no token and uses OIDC
 });
 
 test('optional inputs are passed through, and wait can be turned off', () => {

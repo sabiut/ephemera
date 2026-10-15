@@ -25,7 +25,7 @@ jobs:
       - id: preview
         uses: sabiut/ephemera/actions/preview@main
         with:
-          token: ${{ secrets.EPHEMERA_TOKEN }}          # a pipeline token for this repository
+          token: ${{ secrets.EPHEMERA_TOKEN }}          # or leave out, with id-token: write (OIDC)
           name: pr-${{ github.event.number }}
           images: |
             web=ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
@@ -50,7 +50,7 @@ The preview is removed when the job ends. Set `keep: true` to leave it running f
 
 | Input | Default | |
 |---|---|---|
-| `token` | required | A pipeline token from the Ephemera dashboard (API Tokens, with the repository filled in), stored as a secret. |
+| `token` | | A pipeline token from the Ephemera dashboard (API Tokens, with the repository filled in), stored as a secret. Leave it out to use OIDC: give the job `permissions: id-token: write`, and allow GitHub Actions OIDC on the repository's page in Ephemera (CI pipelines). |
 | `name` | required | The preview's name, such as `pr-142`. Deploying the same name again updates it and keeps its links. |
 | `images` | | One per line, `service=image`, for the compose services this workflow built. Prefer `image@sha256:` digests. |
 | `repository` | this repository | `owner/name`. |

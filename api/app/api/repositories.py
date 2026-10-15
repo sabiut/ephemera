@@ -239,6 +239,44 @@ def put_repository_settings(owner: str, repo: str, body: RepositorySettingsIO, d
     return _settings_out(db, installed.full_name, row, installed.private)
 
 
+class PipelinesSettings(BaseModel):
+    # GitHub Actions in this repository may deploy pipeline previews with
+    # their OIDC identity instead of a stored token (docs/ci-pipeline.md).
+    github_actions_oidc: bool
+    audience: str = ""
+    updated_by_login: Optional[str] = None
+
+
+@router.get("/repositories/{owner}/{repo}/pipelines", response_model=PipelinesSettings)
+async def get_pipelines(owner: str, repo: str, db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_user)):
+    installed = _accessible_repo(owner, repo, current_user)
+    row = _settings_row(db, installed.full_name)
+    return PipelinesSettings(github_actions_oidc=bool(row and row.github_actions_oidc),
+                             audience=get_settings().oidc_audience,
+                             updated_by_login=row.updated_by_login if row else None)
+
+
+@router.put("/repositories/{owner}/{repo}/pipelines", response_model=PipelinesSettings)
+def put_pipelines(owner: str, repo: str, body: PipelinesSettings, db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_user)):
+    """
+    Allow (or stop) GitHub Actions in this repository deploying previews with
+    OIDC. Anyone who can run a workflow in the repository can then deploy its
+    previews; stopping it stops their tokens at their next request.
+    """
+    installed = _accessible_repo(owner, repo, current_user)
+    row = _settings_row(db, installed.full_name)
+    if row is None:
+        row = RepositorySettings(repository_full_name=installed.full_name, protect_previews=installed.private)
+        db.add(row)
+    row.github_actions_oidc = body.github_actions_oidc
+    row.updated_by_login = current_user.github_login
+    db.commit()
+    return PipelinesSettings(github_actions_oidc=row.github_actions_oidc, audience=get_settings().oidc_audience,
+                             updated_by_login=row.updated_by_login)
+
+
 class UsageResponse(BaseModel):
     used: int
     limit: int                 # 0: unlimited

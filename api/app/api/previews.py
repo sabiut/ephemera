@@ -21,7 +21,7 @@ from app.config import settings
 from app.crud import environment as environment_crud
 from app.database import get_db
 from app.models import APIToken, Environment, User
-from app.services import lifecycle, pipeline, preview_access, repo_access
+from app.services import lifecycle, oidc, pipeline, preview_access, repo_access
 from app.services.diagnosis import explain
 from app.services.github import GitHubUnavailable, InstalledRepository
 from app.services.provisioning import PreviewLimitReached
@@ -78,12 +78,22 @@ def _out(env: Environment, warnings: Optional[List[str]] = None, action: Optiona
     )
 
 
-def _repository(repository: str, user: User, token: APIToken) -> InstalledRepository:
+def _repository(repository: str, user: User, token: APIToken, db: Optional[Session] = None) -> InstalledRepository:
     """The repository, if this token may deploy to it: 403 for another repository's pipeline token, else 404."""
     if token.scope and (token.scope != "previews" or
                         (token.repository_full_name or "").lower() != repository.strip().lower()):
         raise HTTPException(status_code=403, detail=f"This pipeline token is for {token.repository_full_name}, "
                                                     f"not {repository}")
+    if oidc.is_oidc(token):
+        # Trusted through GitHub's signed claim and the repository's choice,
+        # not a collaborator's access; both are checked again on every call.
+        installed = oidc._installed(repository.strip())
+        if installed is None:
+            raise HTTPException(status_code=404, detail=f"The Ephemera App isn't installed on {repository}")
+        if db is not None and not oidc.allowed(db, installed.full_name):
+            raise HTTPException(status_code=403, detail=f"{installed.full_name} no longer lets GitHub Actions "
+                                                        "deploy previews with OIDC")
+        return installed
     try:
         repos = repo_access.accessible_repositories(user, is_admin(user))
     except GitHubUnavailable:
@@ -96,12 +106,20 @@ def _repository(repository: str, user: User, token: APIToken) -> InstalledReposi
 
 
 def _visible_pipeline_preview(db: Session, environment_id: int, user: User, token: APIToken) -> Environment:
+    if token.scope:
+        # A pipeline token sees its repository's pipeline previews, whoever's
+        # run created them (the next run deletes what this one left).
+        env = db.get(Environment, environment_id)
+        if env is None or not env.is_pipeline or \
+                (token.repository_full_name or "").lower() != env.repository_full_name.lower():
+            raise HTTPException(status_code=404, detail="Preview not found")
+        _repository(env.repository_full_name, user, token, db)   # still installed, still allowed
+        return env
     admin = is_admin(user)
     env = environment_crud.get_visible_environment(
         db, user, admin, environment_id=environment_id,
         repo_names=None if admin else repo_access.accessible_repo_names(user, admin))
-    if env is None or not env.is_pipeline or (
-            token.scope and (token.repository_full_name or "").lower() != env.repository_full_name.lower()):
+    if env is None or not env.is_pipeline:
         raise HTTPException(status_code=404, detail="Preview not found")
     return env
 
@@ -114,7 +132,7 @@ def deploy_preview(body: PreviewRequest, db: Session = Depends(get_db),
     Returns at once (202); poll GET /previews/{id} until status is "ready"
     or "failed" (the CLI's --wait does).
     """
-    installed = _repository(body.repository, user, token)
+    installed = _repository(body.repository, user, token, db)
     req = pipeline.PipelineRequest(
         repository_full_name=installed.full_name, name=(body.name or "").strip(),
         commit_sha=(body.commit or "").strip().lower(), installation_id=installed.installation_id, owner=user,
@@ -141,7 +159,7 @@ def deploy_preview(body: PreviewRequest, db: Session = Depends(get_db),
 def list_previews(repository: str = Query(...), name: Optional[str] = None, db: Session = Depends(get_db),
                   user: User = Depends(get_current_user), token: APIToken = Depends(get_current_token)):
     """The repository's pipeline previews (or the one with this name), newest first."""
-    installed = _repository(repository, user, token)
+    installed = _repository(repository, user, token, db)
     query = db.query(Environment).filter(
         environment_crud.same_repository(Environment.repository_full_name, installed.full_name),
         Environment.source == "pipeline")

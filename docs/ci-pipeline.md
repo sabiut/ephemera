@@ -1,6 +1,6 @@
 # Previews from a CI/CD pipeline: design
 
-Status: design agreed (decisions below). Steps 1 to 4 are merged: the model and API, the CLI (`cli/`), the GitHub Action (`actions/preview/`) and test access to protected previews. The pipeline end-to-end test (step 5) is next.
+Status: design agreed (decisions below). All six steps are merged (step 5's live run waits for the cluster): the model and API, the CLI (`cli/`), the GitHub Action (`actions/preview/`), test access to protected previews, the pipeline end-to-end workflow, and OIDC for GitHub Actions.
 
 ## Why
 
@@ -198,7 +198,27 @@ Who may deploy: the token's owner must be a collaborator on the repository (chec
      - A second job confirms the Action's post step **removed** the preview when the job ended.
    - It needs the secret `E2E_PIPELINE_TOKEN`: a pipeline token for the test repository. The protected variant also uses `EPHEMERA_TOKEN`.
    - The GHCR package starts private. Make it public once, or the first run fails with "Image is private", which is itself a check of that diagnosis.
-6. **OIDC** (v2).
+6. **OIDC**, for GitHub Actions, so a pipeline needs no stored secret.
+   - **Opt in per repository**, off by default: Repositories → the repository → CI pipelines → "Let this repository's GitHub Actions deploy previews with OIDC" (`PUT /api/v1/repositories/{owner}/{repo}/pipelines`). Anyone who can run a workflow in the repository can then deploy its previews, the same trust as a token in its secrets. Pull requests from forks get no identity token.
+   - **The exchange**: `POST /api/v1/oidc/token` with `{"token": <GitHub's identity token>}`. Ephemera checks:
+     - the token is signed by GitHub's published keys (`token.actions.githubusercontent.com`, RS256), issued for audience `ephemera` (`OIDC_AUDIENCE`), unexpired, and carries `repository`, `actor` and `actor_id`;
+     - the App is installed on that repository, and the repository allows OIDC.
+
+     It returns a pipeline token for that repository's previews, valid for 60 minutes (`OIDC_TOKEN_MINUTES`). The workflow's `actor` owns the previews it creates, recorded as a user if new; bots work too. On every call with that token, Ephemera rechecks that the App is installed and that the repository still allows OIDC. Turning it off stops existing tokens at once. No collaborator check applies, since the trust is the signed claim.
+   - **CLI and Action**: with no `EPHEMERA_TOKEN` and the job's `ACTIONS_ID_TOKEN_REQUEST_*` variables present, they request the identity token and exchange it automatically.
+
+     ```yaml
+     permissions:
+       id-token: write
+       contents: read
+     steps:
+       - uses: sabiut/ephemera/actions/preview@main
+         with:
+           name: pr-${{ github.event.number }}
+           images: web=ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
+     ```
+   - Any repository-scoped token, OIDC or a stored pipeline token, sees its repository's pipeline previews whoever's run created them, so a later run can remove what an earlier one left.
+   - Later: GitLab CI's identity tokens name a GitLab project, so they need a mapping to the GitHub repository first.
 
 ## Decisions
 

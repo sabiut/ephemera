@@ -9,10 +9,13 @@ function main() {
   const name = input('name');
   const repo = input('repository', process.env.GITHUB_REPOSITORY || '');
   const url = input('ephemera-url', 'https://ephemera-api.devpreview.app');
-  if (!token) {
+  // No token: OIDC, if this job may request GitHub's identity token (the CLI
+  // exchanges it for a short-lived pipeline token).
+  if (!token && !process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
     setOutput('exit-code', 2);
-    annotate('error', 'The token input is empty. Store a pipeline token from the Ephemera dashboard as a secret '
-      + 'and pass it as token. Pull requests from forks get no secrets.');
+    annotate('error', 'No token: either pass a pipeline token from the Ephemera dashboard as token (stored as a '
+      + 'secret), or use OIDC: give the job permissions id-token: write and allow GitHub Actions OIDC on the '
+      + "repository's page in Ephemera. Pull requests from forks get neither.");
     return 2;
   }
   saveState('name', name);

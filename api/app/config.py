@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     # deleted first; this default and maximum apply to the request.
     pipeline_preview_default_ttl_hours: int = 24
     pipeline_preview_max_ttl_hours: int = 168
+    # OIDC (docs/ci-pipeline.md, step 6): GitHub Actions jobs exchange their
+    # signed identity token, requested for this audience, for a short-lived
+    # pipeline token, in repositories that allow it.
+    oidc_audience: str = "ephemera"
+    oidc_token_minutes: int = 60
+    github_actions_oidc_issuer: str = "https://token.actions.githubusercontent.com"
 
     # Managed builds (docs/managed-builds.md): Ephemera builds the compose
     # services with build:. Off until the build pipeline exists; the
