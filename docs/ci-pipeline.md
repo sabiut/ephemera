@@ -1,6 +1,6 @@
 # Previews from a CI/CD pipeline: design
 
-Status: design agreed (decisions below). Step 1 (model and API) is merged; the CLI (step 2) is next.
+Status: design agreed (decisions below). Steps 1 (model and API) and 2 (the CLI, `cli/`) are merged; the GitHub Action (step 3) is next.
 
 ## Why
 
@@ -142,6 +142,12 @@ Who may deploy: the token's owner must be a collaborator on the repository (chec
    - The 15-minute transient-failure retry leaves pipeline previews to their pipeline.
    - The dashboard lists them as "pipeline: <name>", with no Retry button (the pipeline redeploys).
 2. **CLI**: `deploy --wait`, `status`, `delete`, `access-header`; JSON output; exit codes; published to PyPI and as a container image.
+   - `cli/`, package `ephemera-cli`, command `ephemera`. Standard library only (Python 3.9 or newer).
+   - Commands: `preview deploy [--wait]`, `preview status` and `preview delete [--wait]` (see [cli/README.md](../cli/README.md)). `access-header` arrives with step 4, which adds its endpoint.
+   - Exit codes: 0 ready, 1 failed (with the diagnosis), 2 usage, 3 timeout, 4 the API refused or was unreachable.
+   - Detects the repository and commit in GitHub Actions (the PR's head, not the merge commit), GitLab CI and Jenkins.
+   - `.github/workflows/cli.yml` tests on Python 3.9 and 3.12 and builds the package and image on every change. A `cli-vX.Y.Z` tag publishes to PyPI and `ghcr.io/sabiut/ephemera-cli`.
+   - Publishing needs, once: a PyPI trusted publisher for this repository and the `cli.yml` workflow, with environment `pypi`.
 3. **GitHub Action** (`sabiut/ephemera-preview`) with a post-step delete; GitLab CI and Jenkins examples in the docs.
 4. **Protected previews for tests**: the access header accepted by the sign-in check.
 5. **End-to-end**: a pipeline variant of the e2e test (build the test app's image in Actions, deploy it by digest, run a request against the URL, delete).
