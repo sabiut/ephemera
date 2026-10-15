@@ -16,6 +16,11 @@ How a request is let through:
    other customer's preview app; a host-only one unlocks only itself.
 
 Ephemera's own readiness probe passes with a header keyed to the host.
+
+Automated tests (a pipeline's, docs/ci-pipeline.md) pass with an access
+header: X-Ephemera-Access, a signed value for one preview and one user,
+valid for minutes, checked like the cookie on every request (the user must
+still be able to view the preview).
 """
 
 from typing import Any, Dict, List, Optional
@@ -32,6 +37,9 @@ COOKIE = "ephemera_preview"
 CALLBACK_PATH = "/_ephemera/callback"
 AUTH_PREFIX = "/_ephemera"
 PROBE_HEADER = "X-Ephemera-Probe"
+ACCESS_HEADER = "X-Ephemera-Access"
+ACCESS_TTL = 15 * 60
+ACCESS_MAX_TTL = 60 * 60
 CODE_TTL = 60
 COOKIE_TTL = 12 * 3600
 AUTH_SERVICE = "ephemera-auth"
@@ -106,6 +114,15 @@ def mint_code(namespace: str, user_id: int) -> str:
 
 def read_code(code: Optional[str]) -> Optional[Dict[str, Any]]:
     return signing.unsign("preview-code", code)
+
+
+def mint_access(namespace: str, user_id: int, ttl: int = ACCESS_TTL) -> str:
+    """An access header value for tests: this preview only, this user's access, ttl seconds (at most an hour)."""
+    return signing.sign("preview-access", {"ns": namespace, "uid": user_id}, min(max(60, ttl), ACCESS_MAX_TTL))
+
+
+def read_access(value: Optional[str]) -> Optional[Dict[str, Any]]:
+    return signing.unsign("preview-access", value)
 
 
 def mint_cookie(namespace: str, user_id: int) -> str:

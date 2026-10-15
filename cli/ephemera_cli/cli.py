@@ -5,6 +5,7 @@ ephemera: deploy a preview from a CI/CD pipeline (docs/ci-pipeline.md).
         --image web=ghcr.io/acme/shop@sha256:... --wait --output json
     ephemera preview status --repo acme/shop --name pr-142
     ephemera preview delete --repo acme/shop --name pr-142
+    ephemera preview access-header --repo acme/shop --name pr-142   # tests vs a protected preview
 
 Talks to the Ephemera API with EPHEMERA_TOKEN (a pipeline token from the
 dashboard, limited to one repository's previews). Standard library only, so
@@ -244,6 +245,24 @@ def cmd_delete(api: Api, args, **wait_kw) -> int:
     return OK
 
 
+def cmd_access_header(api: Api, args, **_) -> int:
+    """
+    A header that lets tests reach a protected preview. It grants access for
+    its lifetime, so keep it out of public logs (the GitHub Action masks it).
+    """
+    preview = _find(api, args)
+    access = api.call("POST", f"/api/v1/previews/{preview['id']}/access", {"minutes": args.minutes})
+    if not access.get("protected"):
+        _say(f"note: {preview.get('repository')}'s previews are public; the header isn't needed (it still works)")
+    if args.format == "json":
+        print(json.dumps(access, indent=2, sort_keys=True))
+    elif args.format == "value":
+        print(access["value"])
+    else:
+        print(f"{access['header']}: {access['value']}")
+    return OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ephemera", description="Deploy Ephemera previews from a CI/CD pipeline.")
     parser.add_argument("--version", action="version", version=f"ephemera {__version__}")
@@ -269,6 +288,15 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--serial", type=int, metavar="N", help="a run number that only grows: older runs are refused")
     d.add_argument("--wait", action="store_true", help="wait until it is ready (exit 0) or failed (exit 1)")
     d.set_defaults(run=cmd_deploy)
+
+    a = preview.add_parser("access-header", help="a short-lived header for tests to reach a protected preview")
+    a.add_argument("--id", type=int, help="the preview's id (from deploy)")
+    a.add_argument("--repo", help="owner/name, with --name")
+    a.add_argument("--name", help="the preview's name, with --repo")
+    a.add_argument("--minutes", type=int, default=15, help="how long it works (1-60; %(default)s)")
+    a.add_argument("--format", choices=["header", "value", "json"], default="header",
+                   help="'X-Ephemera-Access: ...' (default), just the value, or JSON")
+    a.set_defaults(run=cmd_access_header)
 
     for name, run, helptext in (("status", cmd_status, "show a preview"), ("delete", cmd_delete, "remove a preview")):
         p = common(preview.add_parser(name, help=helptext), "5m")

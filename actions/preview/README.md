@@ -34,6 +34,14 @@ jobs:
       - run: npx playwright test
         env:
           BASE_URL: ${{ steps.preview.outputs.url }}
+          # Only needed if the repository's previews are protected:
+          EPHEMERA_ACCESS: ${{ steps.preview.outputs.access-token }}
+```
+
+In `playwright.config.ts`, send it with every request:
+
+```ts
+use: { baseURL: process.env.BASE_URL, extraHTTPHeaders: { 'X-Ephemera-Access': process.env.EPHEMERA_ACCESS ?? '' } }
 ```
 
 The preview is removed when the job ends. Set `keep: true` to leave it running for reviewers instead; it is then removed when the pull request closes, or after `ttl-hours`.
@@ -54,11 +62,12 @@ The preview is removed when the job ends. Set `keep: true` to leave it running f
 | `wait` | `true` | Wait until ready. The step fails, with Ephemera's explanation, if the preview fails or times out. |
 | `timeout` | `10m` | How long to wait. |
 | `keep` | `false` | Keep the preview when the job ends. |
+| `access-minutes` | `30` | How long the `access-header` output works (1-60). |
 | `ephemera-url` | `https://ephemera-api.devpreview.app` | The Ephemera server. |
 
 ## Outputs
 
-`url` (the main link), `urls` (JSON, every public service), `id`, `status`, and `exit-code` (the CLI's: 0 ready, 1 failed, 2 usage, 3 timed out, 4 refused or unreachable).
+`url` (the main link), `urls` (JSON, every public service), `id`, `status`, `access-header` and `access-token` (for tests against a protected preview, masked in the log), and `exit-code` (the CLI's: 0 ready, 1 failed, 2 usage, 3 timed out, 4 refused or unreachable).
 
 ## How it works
 

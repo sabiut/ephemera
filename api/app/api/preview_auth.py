@@ -56,7 +56,9 @@ def check(request: Request, db: Session = Depends(get_db)):
         return Response(status_code=200)
     if preview_access.probe_valid(request.headers.get(preview_access.PROBE_HEADER.lower()), host):
         return Response(status_code=200)  # Ephemera's own readiness check
-    claims = preview_access.read_cookie(request.cookies.get(preview_access.COOKIE))
+    # Automated tests send an access header; browsers carry the cookie.
+    claims = preview_access.read_access(request.headers.get(preview_access.ACCESS_HEADER.lower())) \
+        or preview_access.read_cookie(request.cookies.get(preview_access.COOKIE))
     if not claims or claims.get("ns") != environment.namespace:
         return Response(status_code=401)
     user = db.query(User).filter(User.id == claims.get("uid")).first()

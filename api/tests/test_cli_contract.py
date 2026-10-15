@@ -79,3 +79,26 @@ def test_a_failed_preview_exits_1_with_the_diagnosis(client, db_session, github,
     code = cli.main(["preview", "status", "--repo", "acme/shop", "--name", "pr-1"], send=send)
     out = capsys.readouterr().out
     assert code == 1 and "The app keeps crashing" in out and "What to do:" in out
+
+
+def test_the_access_header_from_the_cli_opens_the_protected_preview(client, db_session, github, queued,
+                                                                    pipeline_token, capsys, user):
+    from app.config import settings
+    from app.models import RepositorySettings
+
+    send = _send(client)
+    cli.main(["preview", "deploy", "--repo", "acme/shop", "--name", "pr-7", "--commit", SHA,
+              "--image", f"web={DIGEST}"], send=send)
+    env = db_session.query(Environment).filter_by(preview_name="pr-7").one()
+    env.status = EnvironmentStatus.READY
+    db_session.query(RepositorySettings).filter_by(repository_full_name="Acme/Shop").update({"protect_previews": True})
+    db_session.commit()
+    capsys.readouterr()
+    assert cli.main(["preview", "access-header", "--repo", "acme/shop", "--name", "pr-7"], send=send) == 0
+    header, value = capsys.readouterr().out.strip().split(": ", 1)
+    assert header == "X-Ephemera-Access"
+
+    host = f"{env.namespace}-web.{settings.base_domain}"
+    ask = lambda h: client.get("/preview-auth/check", headers={"X-Original-URL": f"https://{host}/", **h}).status_code
+    assert ask({}) == 401                       # protected
+    assert ask({header: value}) == 200          # the pipeline's tests get in

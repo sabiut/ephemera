@@ -11,7 +11,7 @@ const SHA = 'a'.repeat(40);
 const READY = { id: 7, repository: 'acme/shop', name: 'pr-142', status: 'ready', commit: SHA,
   url: 'https://ci-pr-142-shop-x-web.devpreview.app', urls: { web: 'https://ci-pr-142-shop-x-web.devpreview.app' } };
 
-function run(script, { inputs = {}, state = {}, stdout = '', code = 0, event = {} } = {}) {
+function run(script, { inputs = {}, state = {}, stdout = '', code = 0, event = {}, access = '' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ephemera-action-'));
   const files = { out: path.join(dir, 'out'), st: path.join(dir, 'state'), log: path.join(dir, 'log'),
     ev: path.join(dir, 'event.json') };
@@ -19,7 +19,7 @@ function run(script, { inputs = {}, state = {}, stdout = '', code = 0, event = {
   fs.writeFileSync(files.ev, JSON.stringify(event));
   const env = { PATH: process.env.PATH, GITHUB_OUTPUT: files.out, GITHUB_STATE: files.st, GITHUB_EVENT_PATH: files.ev,
     GITHUB_REPOSITORY: 'acme/shop', GITHUB_SHA: 'd'.repeat(40), FAKE_LOG: files.log, FAKE_STDOUT: stdout,
-    FAKE_CODE: String(code), EPHEMERA_CLI: JSON.stringify(['node', path.join(__dirname, 'fake-cli.js')]) };
+    FAKE_CODE: String(code), FAKE_ACCESS: access, EPHEMERA_CLI: JSON.stringify(['node', path.join(__dirname, 'fake-cli.js')]) };
   for (const [k, v] of Object.entries(inputs)) env[`INPUT_${k.toUpperCase()}`] = v;
   for (const [k, v] of Object.entries(state)) env[`STATE_${k}`] = v;
   const r = spawnSync('node', [path.join(HERE, script)], { env, encoding: 'utf8' });
@@ -110,4 +110,26 @@ test('the post step keeps it when asked, and never fails the job', () => {
   assert.match(broken.log, /::warning::Could not remove preview pr-142/);
   const nothing = run('post.js', { inputs: { token: 'eph_test' }, state: { name: 'pr-142' } });
   assert.strictEqual(nothing.calls.length, 0);
+});
+
+test('a ready preview gets a masked access header for the tests', () => {
+  const access = JSON.stringify({ header: 'X-Ephemera-Access', value: 'signed.secret', expires_in: 1800, protected: true });
+  const r = run('main.js', { inputs: { ...BASE, 'access-minutes': '45' }, stdout: JSON.stringify(READY), access });
+  assert.strictEqual(r.status, 0, r.log);
+  const call = r.calls.find(c => c.args[1] === 'access-header');
+  assert.deepStrictEqual(call.args, ['preview', 'access-header', '--id', '7', '--format', 'json', '--minutes', '45']);
+  const mask = r.log.indexOf('::add-mask::signed.secret');
+  assert.ok(mask >= 0, 'the value is masked');
+  assert.strictEqual(r.log.indexOf('signed.secret'), mask + '::add-mask::'.length, 'masked before it appears');
+  const o = outputs(r.outputs);
+  assert.strictEqual(o['access-header'], 'X-Ephemera-Access: signed.secret');
+  assert.strictEqual(o['access-token'], 'signed.secret');
+});
+
+test('no access header is only a warning, and none is asked for a failed preview', () => {
+  const r = run('main.js', { inputs: BASE, stdout: JSON.stringify(READY) });
+  assert.strictEqual(r.status, 0);
+  assert.match(r.log, /::warning::Could not get an access header/);
+  const failed = run('main.js', { inputs: BASE, stdout: JSON.stringify({ ...READY, status: 'failed' }), code: 1 });
+  assert.ok(!failed.calls.some(c => c.args[1] === 'access-header'));
 });
