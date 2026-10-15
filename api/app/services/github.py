@@ -69,6 +69,7 @@ class PullRequestInfo:
     # Where the PR's commits live: another repository for a fork (None when
     # the fork was deleted).
     head_repository_full_name: Optional[str] = None
+    repository_private: bool = False
 
 
 # Status updates and comments are the only way a developer hears about a
@@ -244,6 +245,7 @@ class GitHubService:
             author_avatar_url=pr.user.avatar_url,
             repository_full_name=pr.base.repo.full_name,
             head_repository_full_name=pr.head.repo.full_name if pr.head.repo else None,
+            repository_private=bool(pr.base.repo.private),
         )
 
     def is_collaborator(self, installation_id: int, repo_full_name: str, login: str) -> Optional[bool]:

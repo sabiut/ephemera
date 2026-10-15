@@ -312,6 +312,9 @@ async def create_environment(
     except GitHubUnavailable:
         raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
 
+    from app.services import preview_access
+    preview_access.default_protection(db, repo, pr.repository_private)
+
     owner = user_crud.get_or_create_user(
         db=db,
         github_id=pr.author_id,

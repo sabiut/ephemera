@@ -29,6 +29,7 @@ from app.services.deployment import deployment_service
 from app.services.github import github_service
 from app.services.kubernetes import kubernetes_service
 from app.services.deployment import check_readiness, choose_primary_url
+from app.services.compose import image_options
 from app.services import managed_builds, preview_access, registries
 
 logger = logging.getLogger(__name__)
@@ -236,8 +237,8 @@ def _run_deployment(
         elif not services:
             skipped = result.get("skipped_services") or []
             detail = (
-                f"every service is build-only ({', '.join(skipped)}); Ephemera deploys images, "
-                "so the repository's CI must publish an image and the compose file must reference it"
+                f"every service is build-only ({', '.join(skipped)}) and nothing gave them an image. "
+                + image_options()
                 if skipped else "the compose file defines no deployable services"
             )
             result["success"] = False
@@ -383,8 +384,8 @@ def _deployment_summary(result: Dict[str, Any]) -> str:
     skipped = result.get("skipped_services", [])
     if skipped:
         lines.append(
-            "\n> **Skipped** (build-only services need a pre-built image): "
-            + ", ".join(f"`{s}`" for s in skipped) + "\n"
+            "\n> **Skipped** (only `build:`, no image): "
+            + ", ".join(f"`{s}`" for s in skipped) + ". " + image_options() + "\n"
         )
 
     unpinned = result.get("unpinned_builds") or []
@@ -394,7 +395,7 @@ def _deployment_summary(result: Dict[str, Any]) -> str:
             f"\n> **Not built from this commit**: {names} "
             f"{'has' if len(unpinned) == 1 else 'have'} a `build:` section, but the image is not tagged "
             "with `${EPHEMERA_SHA}`, so this preview may not contain the pull request's changes. "
-            "Have CI push an image per commit and reference it as `image: <registry>/<name>:${EPHEMERA_SHA}`.\n"
+            + image_options().replace("reference it next to `build:`", "tag it with the commit") + "\n"
         )
     unset = result.get("unset_variables") or []
     if unset:

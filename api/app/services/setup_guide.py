@@ -1,11 +1,12 @@
 """
 Generate what a repository needs so previews run each commit's own code.
 
-Ephemera runs images; it does not build them. A service with ``build:``
-needs CI to push an image for every commit and the compose file to refer to
-it with ``${EPHEMERA_SHA}``. This produces both, for the repository's own
-services, plus what to do about registry access, so a user can copy them
-instead of adapting the README example by hand.
+The CI route: for repositories that build images in their own CI rather
+than with managed builds (managed_builds.py builds them in Ephemera). A
+service with ``build:`` then needs CI to push an image for every commit and
+the compose file to refer to it with ``${EPHEMERA_SHA}``. This produces both,
+for the repository's own services, plus what to do about registry access, so
+a user can copy them instead of adapting the README example by hand.
 
 The workflow mirrors the one proven on ephemera-test-app. It tags images
 with the pull request's head commit: on pull_request events ``github.sha``
