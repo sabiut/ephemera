@@ -156,6 +156,28 @@ def get_preview(preview_id: int, db: Session = Depends(get_db),
     return _out(_visible_pipeline_preview(db, preview_id, user, token))
 
 
+class AccessRequest(BaseModel):
+    minutes: int = Field(15, ge=1, le=60, description="How long the header works (at most 60 minutes)")
+
+
+@router.post("/previews/{preview_id}/access")
+def preview_access_header(preview_id: int, body: Optional[AccessRequest] = None, db: Session = Depends(get_db),
+                          user: User = Depends(get_current_user), token: APIToken = Depends(get_current_token)):
+    """
+    A short-lived header that lets automated tests reach a protected preview
+    without making it public: send it with every request. It works for this
+    preview only, for as long as its owner may view it.
+    """
+    env = _visible_pipeline_preview(db, preview_id, user, token)
+    minutes = (body or AccessRequest()).minutes
+    return {
+        "header": preview_access.ACCESS_HEADER,
+        "value": preview_access.mint_access(env.namespace, user.id, minutes * 60),
+        "expires_in": minutes * 60,
+        "protected": preview_access.is_protected(db, env.repository_full_name),
+    }
+
+
 @router.delete("/previews/{preview_id}", response_model=PreviewResponse, status_code=202)
 def delete_preview(preview_id: int, db: Session = Depends(get_db),
                    user: User = Depends(get_current_user), token: APIToken = Depends(get_current_token)):

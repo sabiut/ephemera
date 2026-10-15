@@ -1,6 +1,6 @@
 # Previews from a CI/CD pipeline: design
 
-Status: design agreed (decisions below). Steps 1 (model and API), 2 (the CLI, `cli/`) and 3 (the GitHub Action, `actions/preview/`) are merged; access for tests to protected previews (step 4) is next.
+Status: design agreed (decisions below). Steps 1 to 4 are merged: the model and API, the CLI (`cli/`), the GitHub Action (`actions/preview/`) and test access to protected previews. The pipeline end-to-end test (step 5) is next.
 
 ## Why
 
@@ -39,7 +39,7 @@ ephemera preview deploy \
 - The command exits 0 when the preview is Ready, and non-zero with the diagnosis (the same explanations the dashboard gives: "Image is private", "web keeps crashing, exit code 1", …) when it fails or times out. Progress is printed to stderr so the JSON on stdout stays clean.
 - Running the same command again with the same `--name` **updates** that preview (same links), as a push to a PR does today.
 - `ephemera preview delete --repo acme/shop --name pr-142` removes it; so does its expiry if the pipeline never gets there (cancelled, crashed).
-- `ephemera preview access-header --repo … --name …` prints a short-lived header that lets the pipeline's tests reach a protected preview without making it public.
+- `ephemera preview access-header --repo … --name …` prints a short-lived header (15 minutes by default, at most 60) that lets the pipeline's tests reach a protected preview without making it public.
 
 GitHub Actions:
 
@@ -183,6 +183,11 @@ Who may deploy: the token's owner must be a collaborator on the repository (chec
    }
    ```
 4. **Protected previews for tests**: the access header accepted by the sign-in check.
+   - `POST /api/v1/previews/{id}/access` (`{"minutes": 1-60}`, default 15) returns `X-Ephemera-Access` and a signed value for that preview's namespace and the caller.
+   - The sign-in check (`/preview-auth/check`, which nginx asks before each request) accepts it like the cookie. The caller must still be able to view the preview at every request, and the value works for no other preview and for nothing else (it isn't a cookie value).
+   - CLI: `ephemera preview access-header --repo … --name … [--minutes N] [--format header|value|json]`.
+   - Action: outputs `access-header` and `access-token`, issued for `access-minutes` (default 30) once the preview is ready, and **masked** in the job log before they could appear.
+   - Use with Playwright: `extraHTTPHeaders: {'X-Ephemera-Access': process.env.EPHEMERA_ACCESS}`; with curl: `-H "$EPHEMERA_ACCESS_HEADER"`.
 5. **End-to-end**: a pipeline variant of the e2e test (build the test app's image in Actions, deploy it by digest, run a request against the URL, delete).
 6. **OIDC** (v2).
 

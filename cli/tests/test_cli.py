@@ -21,10 +21,14 @@ class FakeApi:
         self.states = list(states)
         self.post_status, self.post_detail, self.stage = post_status, post_detail, stage
         self.preview = None
+        self.protected = True
 
     def __call__(self, method, url, headers, data):
         body = json.loads(data) if data else None
         self.calls.append((method, url.split("devpreview.app", 1)[-1], headers, body))
+        if method == "POST" and url.endswith("/access"):
+            return 200, json.dumps({"header": "X-Ephemera-Access", "value": "signed.value", "expires_in":
+                                    body["minutes"] * 60, "protected": self.protected}).encode()
         if method == "POST":
             if self.post_status >= 400:
                 return self.post_status, json.dumps({"detail": self.post_detail}).encode()
@@ -191,3 +195,16 @@ def test_the_url_comes_from_the_environment(capsys, monkeypatch):
         return api(method, url, headers, data)
     cli.main(DEPLOY, send=send)
     assert seen[0] == "https://ephemera.example.com/api/v1/previews"
+
+
+def test_an_access_header_for_tests(capsys):
+    api = FakeApi()
+    _run(DEPLOY, api, capsys)
+    code, out, err = _run(["preview", "access-header", "--repo", "acme/shop", "--name", "pr-142"], api, capsys)
+    assert code == 0 and out.strip() == "X-Ephemera-Access: signed.value" and "public" not in err
+    assert api.calls[-1][1] == "/api/v1/previews/7/access" and api.calls[-1][3] == {"minutes": 15}
+    _, out, _ = _run(["preview", "access-header", "--id", "7", "--format", "value", "--minutes", "40"], api, capsys)
+    assert out.strip() == "signed.value" and api.calls[-1][3] == {"minutes": 40}
+    api.protected = False
+    _, out, err = _run(["preview", "access-header", "--id", "7", "--format", "json"], api, capsys)
+    assert json.loads(out)["value"] == "signed.value" and "previews are public" in err

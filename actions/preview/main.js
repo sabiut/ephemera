@@ -46,6 +46,20 @@ function main() {
     saveState('id', preview.id);   // post.js removes it at the end of the job, even if tests fail
     console.log(`${preview.repository} ${preview.name}: ${preview.status}${preview.url ? ` at ${preview.url}` : ''}`);
   }
+  if (code === 0 && preview && preview.status === 'ready') {
+    // For tests against a protected preview (harmless for a public one).
+    const access = runCli(['preview', 'access-header', '--id', String(preview.id), '--format', 'json',
+                           '--minutes', input('access-minutes', '30')], token, url);
+    try {
+      const a = JSON.parse(access.stdout);
+      console.log(`::add-mask::${a.value}`);   // before it could appear anywhere in the log
+      setOutput('access-header', `${a.header}: ${a.value}`);
+      setOutput('access-token', a.value);
+    } catch (e) {
+      annotate('warning', `Could not get an access header for preview ${name} (ephemera exited ${access.code}); `
+        + 'tests can still reach it if its previews are public.');
+    }
+  }
   if (code === 1 && preview) {
     const d = preview.diagnosis || {};
     annotate('error', [`Preview ${name} failed: ${d.title || preview.error || 'see the log'}.`, d.explanation,

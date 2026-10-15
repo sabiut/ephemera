@@ -52,6 +52,10 @@ inputs:
     description: 'Keep the preview when the job ends (it still expires after ttl-hours). Default: remove it.'
     required: false
     default: 'false'
+  access-minutes:
+    description: "How long the access-header output works (1-60 minutes), for tests against a protected preview."
+    required: false
+    default: '30'
   ephemera-url:
     description: "The Ephemera server."
     required: false
@@ -64,6 +68,10 @@ outputs:
     description: "Every public service's link, as JSON {service: url}."
   id:
     description: "The preview's id."
+  access-header:
+    description: "'X-Ephemera-Access: ...': send it with every test request to reach a protected preview. Masked in logs."
+  access-token:
+    description: "Just the header's value. Masked in logs."
   exit-code:
     description: "The ephemera CLI's exit code: 0 ready, 1 failed, 2 usage, 3 timed out, 4 refused or unreachable."
   status:

@@ -12,7 +12,12 @@ ephemera preview deploy --repo acme/shop --name pr-142 \
 
 ephemera preview status --repo acme/shop --name pr-142
 ephemera preview delete --repo acme/shop --name pr-142
+
+# Tests against a protected preview: send this header with every request
+ephemera preview access-header --repo acme/shop --name pr-142 --minutes 30
 ```
+
+`access-header` prints `X-Ephemera-Access: …` (or `--format value` for just the value, `--format json`). It works for that preview only, for the given minutes (at most 60), and only while the token's owner can still view the preview. It grants access, so keep it out of public logs.
 
 ## deploy
 
