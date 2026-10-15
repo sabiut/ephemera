@@ -1,16 +1,17 @@
-name: ephemera CLI
+name: ephemera CLI and GitHub Action
 
-# The CLI pipelines use to deploy previews (cli/, docs/ci-pipeline.md).
+# The CLI pipelines use to deploy previews (cli/, docs/ci-pipeline.md), and
+# the GitHub Action that wraps it (actions/preview/).
 # Every change: tests on the oldest and newest supported Python, the package
 # and the container image built. A tag cli-vX.Y.Z publishes both: PyPI by
 # trusted publishing (no token stored here), the image to GHCR.
 
 on:
   pull_request:
-    paths: ['cli/**', '.github/workflows/cli.yml']
+    paths: ['cli/**', 'actions/**', '.github/workflows/cli.yml']
   push:
     branches: [main]
-    paths: ['cli/**', '.github/workflows/cli.yml']
+    paths: ['cli/**', 'actions/**', '.github/workflows/cli.yml']
     tags: ['cli-v*']
 
 permissions:
@@ -45,6 +46,33 @@ jobs:
         with:
           name: dist
           path: cli/dist/
+
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Action tests
+        run: node --test actions/preview/test/action.test.js
+      - name: The action runs the repository's CLI
+        # Nothing listens on this address: the real CLI must be found and
+        # must report it (exit 4), as the action's annotation.
+        uses: ./actions/preview
+        id: unreachable
+        continue-on-error: true
+        with:
+          token: not-a-real-token
+          name: action-smoke
+          images: web=nginx@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          ephemera-url: http://127.0.0.1:9
+      - name: It failed for the right reason
+        # A broken action.yml also "fails"; exit code 4 means the action
+        # loaded, ran the real CLI, and the CLI reported the unreachable server.
+        run: |
+          test "${{ steps.unreachable.outcome }}" = failure
+          test "${{ steps.unreachable.outputs.exit-code }}" = 4
 
   image:
     runs-on: ubuntu-latest

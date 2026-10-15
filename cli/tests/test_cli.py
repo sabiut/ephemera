@@ -87,9 +87,11 @@ def test_a_failed_preview_exits_1_with_the_diagnosis(capsys):
     assert code == 1 and "Image is private" in out and "What to do: Add a read-only registry token." in out
 
 
-def test_waiting_too_long_exits_3(capsys):
-    code, _, err = _run(DEPLOY + ["--wait", "--timeout", "20s"], FakeApi(states=["provisioning"]), capsys)
+def test_waiting_too_long_exits_3_and_still_prints_the_preview(capsys):
+    code, out, err = _run(DEPLOY + ["--wait", "--timeout", "20s", "--output", "json"],
+                          FakeApi(states=["provisioning"]), capsys)
     assert code == 3 and "timed out after 20s" in err and "still provisioning" in err
+    assert json.loads(out)["id"] == 7    # so the pipeline can still clean it up
 
 
 def test_without_wait_it_returns_at_once(capsys):

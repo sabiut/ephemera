@@ -34,9 +34,10 @@ DONE = {"ready", "failed", "destroyed"}
 
 
 class CliError(Exception):
-    def __init__(self, message: str, code: int = USAGE):
+    def __init__(self, message: str, code: int = USAGE, preview: Optional[Dict[str, Any]] = None):
         super().__init__(message)
         self.code = code
+        self.preview = preview   # the last state seen, when there is one (a timeout)
 
 
 # ------------------------------------------------------------------ the API
@@ -185,7 +186,7 @@ def wait_for(api: Api, preview: Dict[str, Any], timeout: int, want: Callable[[Di
             return preview
         if clock() - start >= timeout:
             raise CliError(f"timed out after {timeout}s; the preview is still {preview.get('status')} "
-                           f"({preview.get('stage_detail') or preview.get('stage') or 'no detail'})", TIMEOUT)
+                           f"({preview.get('stage_detail') or preview.get('stage') or 'no detail'})", TIMEOUT, preview)
         sleep(poll)
         preview = api.call("GET", f"/api/v1/previews/{preview['id']}")
 
@@ -213,8 +214,15 @@ def cmd_deploy(api: Api, args, **wait_kw) -> int:
         _say(f"warning: {warning}")
     _say(f"{preview.get('action', 'deployed')} {repo} {args.name} (id {preview['id']}) at {commit[:7]}")
     if args.wait:
-        preview = wait_for(api, preview, parse_duration(args.timeout),
-                           lambda p: p.get("status") in DONE and p.get("commit") == commit, **wait_kw)
+        try:
+            preview = wait_for(api, preview, parse_duration(args.timeout),
+                               lambda p: p.get("status") in DONE and p.get("commit") == commit, **wait_kw)
+        except CliError as e:
+            # Still print what exists (its id, its links): the pipeline may
+            # want to clean it up or look at it.
+            if e.preview is not None:
+                _emit(e.preview, args.output)
+            raise
     _emit(preview, args.output)
     return _exit_code(preview) if args.wait else OK
 

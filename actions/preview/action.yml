@@ -1,0 +1,76 @@
+name: Ephemera preview
+description: Deploy a working preview of your app from images this workflow built, wait until it works, and remove it when the job ends.
+author: Ephemera
+branding:
+  icon: eye
+  color: purple
+
+inputs:
+  token:
+    description: "A pipeline token from the Ephemera dashboard (API Tokens, with the repository filled in). Store it as a secret."
+    required: true
+  name:
+    description: "The preview's name, for example pr-142 (from github.event.number). Deploying the same name again updates it."
+    required: true
+  images:
+    description: "One per line, service=image (prefer image@sha256:digest), for the compose services this workflow built."
+    required: false
+    default: ''
+  repository:
+    description: "owner/name. Defaults to this repository."
+    required: false
+    default: ''
+  commit:
+    description: "The commit the images were built from. Defaults to the pull request's head (not the merge commit), else GITHUB_SHA."
+    required: false
+    default: ''
+  compose:
+    description: "Path to a compose file to use instead of the repository's at the commit."
+    required: false
+    default: ''
+  ttl-hours:
+    description: "Removed after this long if the job never gets to remove it (1-168)."
+    required: false
+    default: '24'
+  pull-request:
+    description: "Comment on, and remove with, this pull request. Defaults to the triggering pull request, if any."
+    required: false
+    default: ''
+  serial:
+    description: "A run number that only grows (e.g. github.run_number); older runs are refused instead of overwriting newer ones."
+    required: false
+    default: ''
+  wait:
+    description: "Wait until the preview is ready (the step fails if it fails or times out)."
+    required: false
+    default: 'true'
+  timeout:
+    description: "How long to wait, e.g. 10m."
+    required: false
+    default: '10m'
+  keep:
+    description: 'Keep the preview when the job ends (it still expires after ttl-hours). Default: remove it.'
+    required: false
+    default: 'false'
+  ephemera-url:
+    description: "The Ephemera server."
+    required: false
+    default: 'https://ephemera-api.devpreview.app'
+
+outputs:
+  url:
+    description: "The preview's main link."
+  urls:
+    description: "Every public service's link, as JSON {service: url}."
+  id:
+    description: "The preview's id."
+  exit-code:
+    description: "The ephemera CLI's exit code: 0 ready, 1 failed, 2 usage, 3 timed out, 4 refused or unreachable."
+  status:
+    description: "ready, failed, pending, ... (with wait false, as accepted)."
+
+runs:
+  using: node20
+  main: main.js
+  post: post.js
+  post-if: always()
