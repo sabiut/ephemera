@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ephemera-cli"
+dynamic = ["version"]
+description = "Deploy Ephemera preview environments from a CI/CD pipeline"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []   # standard library only: installs in any CI image in a second
+
+[project.scripts]
+ephemera = "ephemera_cli.cli:main"
+
+[tool.setuptools]
+packages = ["ephemera_cli"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ephemera_cli.__version__" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
