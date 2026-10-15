@@ -1,6 +1,6 @@
 # Previews from a CI/CD pipeline: design
 
-Status: proposal for review. No code yet.
+Status: design agreed (decisions below). No code yet.
 
 ## Why
 
@@ -115,9 +115,11 @@ Who may deploy: the token's owner must be a collaborator on the repository (chec
 5. **End-to-end**: a pipeline variant of the e2e test (build the test app's image in Actions, deploy it by digest, run a request against the URL, delete).
 6. **OIDC** (v2).
 
-## Questions for you
+## Decisions
 
-1. **GitHub-hosted repositories only in v1** (any CI system), as proposed? Supporting GitLab- or Bitbucket-hosted code means accounts and workspaces that don't come from the GitHub App, which is a much larger change.
-2. **Default expiry 24 hours, maximum 7 days?**
-3. **CLI in Python** (fastest to build, matches the codebase; needs Python in the CI image, or the container image) or a **single static binary** (Go; nothing to install, more to maintain)?
-4. **Count pipeline previews against the same per-repository limit** (5) as PR previews, or give them their own?
+Agreed with the owner on 2026-10-15:
+
+1. **Repositories hosted on GitHub only in v1**, with the Ephemera App installed; deployed from **any** CI system. Code hosted elsewhere waits for workspaces that don't depend on the GitHub App.
+2. **Expiry:** 24 hours by default, 7 days at most.
+3. **CLI in Python**, published to PyPI and as a container image for CI systems without Python.
+4. **Pipeline previews count against the same per-repository limit** as pull-request previews (5 by default).
