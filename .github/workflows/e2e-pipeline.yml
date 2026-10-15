@@ -1,0 +1,223 @@
+name: End-to-end pipeline preview
+
+# CI integration step 5 (docs/ci-pipeline.md): the journey a company's
+# pipeline takes, against the live platform. It builds the test app's image
+# here, deploys it by digest with the GitHub Action (actions/preview), checks
+# the preview runs exactly that image, updates it with a second build, checks
+# an older run is refused, optionally checks protected links, and confirms
+# the preview is removed when the job ends.
+#
+# The image carries a marker unique to this run (GIT_SHA build arg, which the
+# test app's page prints), so "serves the marker" proves the preview runs the
+# image this workflow built, not the test app's own CI image for the commit.
+#
+# Secrets:
+#   E2E_PIPELINE_TOKEN  a pipeline token for the test repository (dashboard →
+#                       API Tokens, repository filled in)
+#   EPHEMERA_TOKEN      a full API token; only for the protected variant,
+#                       which switches the repository's protection on and back
+# The image goes to ghcr.io/<owner>/ephemera-e2e-pipeline. Packages start
+# private: make it public once (package settings), or the first run fails
+# with "Image is private", which is also a fair test.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Test repository (on GitHub, with the Ephemera App installed)
+        default: sabiut/ephemera-test-app
+      protected:
+        description: Also check protected links (anonymous visitors refused, the access header let in)
+        type: boolean
+        default: false
+      ephemera-url:
+        description: Ephemera server
+        default: https://ephemera-api.devpreview.app
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: e2e-pipeline
+  cancel-in-progress: false
+
+env:
+  NAME: e2e-${{ github.run_id }}
+  REPO: ${{ inputs.repository }}
+  EPHEMERA_URL: ${{ inputs.ephemera-url }}
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the test app
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          path: app
+
+      - id: app
+        name: The commit the images are built from
+        run: |
+          echo "sha=$(git -C app rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ephemera-e2e-pipeline" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build1
+        name: Build and push image 1
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: ${{ steps.app.outputs.image }}:${{ github.run_id }}-1
+          build-args: GIT_SHA=e2e-${{ github.run_id }}-1
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Protection on
+        if: inputs.protected
+        env:
+          TOKEN: ${{ secrets.EPHEMERA_TOKEN }}
+        run: |
+          curl -sf -X PUT "$EPHEMERA_URL/api/v1/repositories/$REPO/settings" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"protect_previews": true}' > /dev/null
+
+      - id: preview
+        name: Deploy the preview (the Action)
+        uses: ./actions/preview
+        with:
+          token: ${{ secrets.E2E_PIPELINE_TOKEN }}
+          repository: ${{ inputs.repository }}
+          name: ${{ env.NAME }}
+          commit: ${{ steps.app.outputs.sha }}
+          images: web=${{ steps.app.outputs.image }}@${{ steps.build1.outputs.digest }}
+          serial: '2'
+          ttl-hours: '2'
+          timeout: 15m
+          ephemera-url: ${{ inputs.ephemera-url }}
+
+      - name: It serves the image this workflow built
+        env:
+          URL: ${{ steps.preview.outputs.url }}
+          ACCESS: ${{ steps.preview.outputs.access-header }}
+        run: |
+          for i in $(seq 1 24); do
+            body=$(curl -s ${ACCESS:+-H "$ACCESS"} "$URL") || true
+            echo "$body" | grep -q "e2e-${{ github.run_id }}-1" && { echo "serves image 1 at $URL"; exit 0; }
+            sleep 5
+          done
+          echo "::error::$URL did not serve image 1 (last answer: ${body:0:300})"; exit 1
+
+      - name: Protected links refuse anonymous visitors
+        if: inputs.protected
+        env:
+          URL: ${{ steps.preview.outputs.url }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$URL")
+          location=$(curl -s -o /dev/null -w '%{redirect_url}' "$URL")
+          echo "anonymous: HTTP $code -> $location"
+          test "$code" = 302 -o "$code" = 303
+          echo "$location" | grep -q "/preview-auth/start"
+
+      - id: build2
+        name: Build and push image 2
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: ${{ steps.app.outputs.image }}:${{ github.run_id }}-2
+          build-args: GIT_SHA=e2e-${{ github.run_id }}-2
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - id: update
+        name: Deploy again under the same name (an update)
+        working-directory: cli
+        env:
+          EPHEMERA_TOKEN: ${{ secrets.E2E_PIPELINE_TOKEN }}
+        run: |
+          python3 -m ephemera_cli preview deploy --repo "$REPO" --name "$NAME" \
+            --commit "${{ steps.app.outputs.sha }}" \
+            --image "web=${{ steps.app.outputs.image }}@${{ steps.build2.outputs.digest }}" \
+            --serial 3 --wait --timeout 15m --output json > ../update.json
+          python3 -c "import json; p=json.load(open('../update.json')); print(p['status'], p['url'])"
+          echo "url=$(python3 -c "import json; print(json.load(open('../update.json'))['url'])")" >> "$GITHUB_OUTPUT"
+
+      - name: The same link now serves image 2
+        env:
+          URL: ${{ steps.preview.outputs.url }}
+          UPDATED_URL: ${{ steps.update.outputs.url }}
+          ACCESS: ${{ steps.preview.outputs.access-header }}
+        run: |
+          test "$URL" = "$UPDATED_URL" || { echo "::error::the link changed: $URL -> $UPDATED_URL"; exit 1; }
+          for i in $(seq 1 24); do
+            body=$(curl -s ${ACCESS:+-H "$ACCESS"} "$URL") || true
+            echo "$body" | grep -q "e2e-${{ github.run_id }}-2" && { echo "same link serves image 2"; exit 0; }
+            sleep 5
+          done
+          echo "::error::$URL did not serve image 2 (last answer: ${body:0:300})"; exit 1
+
+      - name: An older run is refused
+        working-directory: cli
+        env:
+          EPHEMERA_TOKEN: ${{ secrets.E2E_PIPELINE_TOKEN }}
+        run: |
+          set +e
+          python3 -m ephemera_cli preview deploy --repo "$REPO" --name "$NAME" \
+            --commit "${{ steps.app.outputs.sha }}" \
+            --image "web=${{ steps.app.outputs.image }}@${{ steps.build1.outputs.digest }}" --serial 1 2> refused.txt
+          code=$?
+          cat refused.txt
+          test "$code" = 4 && grep -q "newer run" refused.txt
+
+      - name: Protection back off
+        if: always() && inputs.protected
+        env:
+          TOKEN: ${{ secrets.EPHEMERA_TOKEN }}
+        run: |
+          curl -sf -X PUT "$EPHEMERA_URL/api/v1/repositories/$REPO/settings" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"protect_previews": false}' > /dev/null
+
+  # The Action's post step removed the preview when the job above ended.
+  removed:
+    runs-on: ubuntu-latest
+    needs: pipeline
+    if: always() && needs.pipeline.result != 'skipped'
+    steps:
+      - uses: actions/checkout@v4
+      - name: The preview is gone
+        working-directory: cli
+        env:
+          EPHEMERA_TOKEN: ${{ secrets.E2E_PIPELINE_TOKEN }}
+        run: |
+          for i in $(seq 1 30); do
+            set +e
+            python3 -m ephemera_cli preview status --repo "$REPO" --name "$NAME" --output json > status.json 2> err.txt
+            set -e
+            if grep -q "no pipeline preview named" err.txt; then
+              echo "$NAME was never created (the deploy failed earlier): nothing to remove"; exit 0
+            fi
+            status=$(python3 -c "import json; print(json.load(open('status.json'))['status'])" 2>/dev/null || echo unknown)
+            echo "status: $status $(cat err.txt)"
+            test "$status" = destroyed && exit 0
+            sleep 10
+          done
+          echo "::error::$NAME was not removed after the job ended"; exit 1
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Pipeline preview journey: ${{ needs.pipeline.result }}"
+            echo
+            echo "Preview \`$NAME\` in \`$REPO\`, built and deployed by this workflow, updated, an older run refused"
+            echo "${{ inputs.protected && ', protected links checked' || '' }}, and removed when the job ended."
+          } >> "$GITHUB_STEP_SUMMARY"
