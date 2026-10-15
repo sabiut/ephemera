@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     # and comes back on the next push (0: never).
     preview_max_active_per_repository: int = 5
     preview_idle_days: int = 7
+    # Pipeline previews (docs/ci-pipeline.md): removed after ttl_hours unless
+    # deleted first; this default and maximum apply to the request.
+    pipeline_preview_default_ttl_hours: int = 24
+    pipeline_preview_max_ttl_hours: int = 168
 
     # Managed builds (docs/managed-builds.md): Ephemera builds the compose
     # services with build:. Off until the build pipeline exists; the

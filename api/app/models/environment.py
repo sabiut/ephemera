@@ -28,6 +28,9 @@ class Environment(Base):
     __tablename__ = "environments"
     __table_args__ = (
         UniqueConstraint("repository_full_name", "pr_number", name="uq_environments_repo_pr"),
+        # Pipeline previews (docs/ci-pipeline.md) are named per repository.
+        # NULLs are distinct, so pull-request previews never collide here.
+        UniqueConstraint("repository_full_name", "preview_name", name="uq_environments_repo_preview_name"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -35,7 +38,20 @@ class Environment(Base):
     # GitHub/PR Information
     repository_full_name = Column(String, index=True, nullable=False)  # e.g., "owner/repo"
     repository_name = Column(String, nullable=False)                    # e.g., "repo"
-    pr_number = Column(Integer, index=True, nullable=False)
+    # "pull_request": created for a PR (pr_number). "pipeline": created by a
+    # CI pipeline (preview_name), see docs/ci-pipeline.md.
+    source = Column(String, nullable=False, default="pull_request", server_default="pull_request")
+    pr_number = Column(Integer, index=True, nullable=True)        # pull-request previews
+    preview_name = Column(String, nullable=True)                  # pipeline previews
+    # Pipeline previews: the PR whose closing removes it, the images the
+    # pipeline supplied ({service: image}), the compose file it sent (else
+    # the repository's at the commit), the newest run that deployed it, and
+    # when it expires if nobody deletes it.
+    linked_pr_number = Column(Integer, nullable=True)
+    image_overrides = Column(JSON, nullable=True)
+    compose_override = Column(Text, nullable=True)
+    serial = Column(Integer, nullable=True)
+    pipeline_expires_at = Column(DateTime(timezone=True), nullable=True)
     pr_title = Column(String, nullable=True)
     branch_name = Column(String, nullable=False)                        # e.g., "feature-branch"
     commit_sha = Column(String, index=True, nullable=False)            # Latest commit
@@ -108,10 +124,21 @@ class Environment(Base):
 
     def generate_namespace(self) -> str:
         """Generate Kubernetes namespace name"""
+        if self.source == "pipeline":
+            return build_namespace(self.repository_full_name, self.preview_name, prefix="ci")
         return build_namespace(self.repository_full_name, self.pr_number)
 
+    @property
+    def is_pipeline(self) -> bool:
+        return self.source == "pipeline"
 
-def build_namespace(repository_full_name: str, pr_number: int) -> str:
+    @property
+    def notify_pr_number(self):
+        """The PR that hears about this preview: its own, or the one a pipeline preview is linked to."""
+        return self.linked_pr_number if self.is_pipeline else self.pr_number
+
+
+def build_namespace(repository_full_name: str, pr_number, prefix: str = "pr") -> str:
     """
     Build the Kubernetes namespace for a PR: pr-{number}-{repo-slug}-{hash}.
 
@@ -129,4 +156,4 @@ def build_namespace(repository_full_name: str, pr_number: int) -> str:
     name = repository_full_name.rsplit("/", 1)[-1]
     slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:20].rstrip("-")
     digest = hashlib.sha256(repository_full_name.lower().encode()).hexdigest()[:6]
-    return f"pr-{pr_number}-{slug or 'repo'}-{digest}"
+    return f"{prefix}-{pr_number}-{slug or 'repo'}-{digest}"

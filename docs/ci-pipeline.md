@@ -1,6 +1,6 @@
 # Previews from a CI/CD pipeline: design
 
-Status: design agreed (decisions below). No code yet.
+Status: design agreed (decisions below). Step 1 (model and API) is merged; the CLI (step 2) is next.
 
 ## Why
 
@@ -109,6 +109,38 @@ Who may deploy: the token's owner must be a collaborator on the repository (chec
 ## Rollout
 
 1. **Model and API**: migration, `POST/GET/DELETE /api/v1/previews`, image overrides, `serial`, expiry, scoped tokens. Tests, then a live run with `curl`.
+   Until the CLI exists, a pipeline calls the API directly. Create a pipeline token first: `POST /api/v1/tokens/` with `{"name": "ci", "repository": "acme/shop"}`, or the dashboard's token form. It works only for the previews API, and only for that repository.
+
+   ```bash
+   # Deploy (or update) the preview; returns at once with its id
+   curl -sf -X POST https://ephemera-api.devpreview.app/api/v1/previews \
+     -H "Authorization: Bearer $EPHEMERA_TOKEN" -H "Content-Type: application/json" \
+     -d '{"repository": "acme/shop", "name": "pr-142", "commit": "'"$GIT_SHA"'",
+          "images": {"web": "ghcr.io/acme/shop@sha256:…"}, "pull_request": 142, "serial": '"$RUN_NUMBER"'}'
+
+   # Poll until "ready" (use .url) or "failed" (read .diagnosis)
+   curl -sf -H "Authorization: Bearer $EPHEMERA_TOKEN" https://ephemera-api.devpreview.app/api/v1/previews/812
+
+   # Remove it when the pipeline is done
+   curl -sf -X DELETE -H "Authorization: Bearer $EPHEMERA_TOKEN" https://ephemera-api.devpreview.app/api/v1/previews/812
+   ```
+
+   Responses:
+   - `202`: accepted, with `action` (`created`, `updated` or `reprovisioned`) and any `warnings`, such as an image given by tag rather than digest.
+   - `422`: something in the request can't work (name, commit, image reference, ttl).
+   - `409`: an older `serial` than the run that last deployed this preview.
+   - `429`: the repository's previews limit, which pull-request and pipeline previews share.
+   - `403`: a pipeline token used for another repository, or for anything but `/api/v1/previews`.
+
+   As built:
+   - The images are applied with the compose converter (never the AI planner) and the rules from #75.
+   - Images sent for services the compose file lacks produce a warning on the preview.
+   - Commit statuses go under `ephemera/preview/<name>`, so they never overwrite a pull-request preview's on the same commit.
+   - A PR comment is posted only when `pull_request` is given.
+   - Closing that PR removes the preview.
+   - The hourly expiry job removes it at its deadline.
+   - The 15-minute transient-failure retry leaves pipeline previews to their pipeline.
+   - The dashboard lists them as "pipeline: <name>", with no Retry button (the pipeline redeploys).
 2. **CLI**: `deploy --wait`, `status`, `delete`, `access-header`; JSON output; exit codes; published to PyPI and as a container image.
 3. **GitHub Action** (`sabiut/ephemera-preview`) with a post-step delete; GitLab CI and Jenkins examples in the docs.
 4. **Protected previews for tests**: the access header accepted by the sign-in check.

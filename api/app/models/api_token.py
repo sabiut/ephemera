@@ -41,6 +41,10 @@ class APIToken(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)  # Optional expiration
+    # A pipeline token (docs/ci-pipeline.md): only the previews API, only for
+    # this repository. NULL: a full API token, as before.
+    scope = Column(String, nullable=True)                 # "previews"
+    repository_full_name = Column(String, nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
 
     TYPE_API = "api"

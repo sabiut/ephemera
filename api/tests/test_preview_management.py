@@ -128,5 +128,6 @@ def test_usage_counts_the_repositorys_slots(client, auth_headers, db, user, monk
     _env(db, user, EnvironmentStatus.FAILED, pr=4)
     _env(db, user, EnvironmentStatus.DESTROYED, pr=5)
     body = client.get("/api/v1/repositories/acme/app/usage", headers=auth_headers).json()
-    assert body == {"used": 2, "limit": settings.preview_max_active_per_repository, "pull_requests": [3, 4]}
+    assert body == {"used": 2, "limit": settings.preview_max_active_per_repository, "pull_requests": [3, 4],
+                    "pipeline_previews": []}
     repo_access.clear_cache()

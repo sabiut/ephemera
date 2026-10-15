@@ -40,7 +40,10 @@ class EnvironmentResponse(BaseModel):
     id: int
     repository_full_name: str
     repository_name: str
-    pr_number: int
+    pr_number: Optional[int] = None          # pull-request previews
+    source: str = "pull_request"             # or "pipeline" (docs/ci-pipeline.md)
+    preview_name: Optional[str] = None       # pipeline previews
+    linked_pr_number: Optional[int] = None
     pr_title: Optional[str]
     branch_name: str
     commit_sha: str

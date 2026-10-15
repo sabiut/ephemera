@@ -260,6 +260,12 @@ async function loadUserInfo() {
 
 // ─── Renderers ──────────────────────────────────────────
 
+// "#142" for a pull request's preview, "pipeline: pr-142" for one a CI
+// pipeline created (docs/ci-pipeline.md).
+function envLabel(env) {
+    return env.source === 'pipeline' ? `pipeline: ${env.preview_name}` : `#${env.pr_number}`;
+}
+
 function statusBadge(status, label) {
     const s = (status || 'pending').toLowerCase();
     return `<span class="badge badge-${s}"><span class="badge-dot"></span>${escapeHtml(label || s)}</span>`;
@@ -444,7 +450,7 @@ function envTableHTML(envs) {
                 ${envs.map(env => `
                     <tr>
                         <td class="mono">${escapeHtml(env.repository_full_name || '-')}</td>
-                        <td>#${env.pr_number || '-'}</td>
+                        <td>${escapeHtml(envLabel(env))}</td>
                         <td class="text-muted">${escapeHtml(env.owner_login || '-')}</td>
                         <td class="mono text-muted">${escapeHtml(env.branch_name || '-')}</td>
                         <td>${statusBadge(env.status)}${stageLineHTML(env)}${readinessLineHTML(env)}${envErrorHTML(env)}</td>
@@ -539,7 +545,7 @@ function renderEnvironmentDetail() {
     const repo = env.repository_full_name;
     const sha = env.commit_sha || '';
     const running = ['pending', 'provisioning', 'ready', 'updating', 'failed'].includes(status);
-    document.getElementById('envDetailTitle').textContent = `${repo} #${env.pr_number}`;
+    document.getElementById('envDetailTitle').textContent = `${repo} ${envLabel(env)}`;
 
     const meta = `<div class="detail-meta">
         <div><div class="label">Status</div><div class="value">${statusBadge(env.status)}</div></div>
@@ -602,7 +608,9 @@ function renderEnvironmentDetail() {
     body.innerHTML = prTitle + meta + main + buildHTML(env) + expiry + history;
 
     const recreatable = status === 'destroyed' && ['expired', 'stopped'].includes(env.removal_reason);
-    const retry = status === 'failed'
+    // A pipeline preview is redeployed by its pipeline, not from here.
+    const retry = env.source === 'pipeline' ? ''
+        : status === 'failed'
         ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Retry preview</button>`
         : recreatable ? `<button class="btn btn-primary" onclick="retryEnvironment(${env.id}, this)">Recreate preview</button>` : '';
     const stop = running
@@ -613,11 +621,14 @@ function renderEnvironmentDetail() {
 async function stopEnvironment(id, button) {
     const env = cachedEnvironments.find(e => e.id === id);
     if (!env) return;
-    if (!confirm(`Stop the preview for #${env.pr_number}? The pull request stays open and its slot is freed. New commits won't bring it back until you recreate it.`)) return;
+    const stopQuestion = env.source === 'pipeline'
+        ? `Remove the pipeline preview ${env.preview_name}? Its pipeline can deploy it again.`
+        : `Stop the preview for #${env.pr_number}? The pull request stays open and its slot is freed. New commits won't bring it back until you recreate it.`;
+    if (!confirm(stopQuestion)) return;
     if (button) { button.disabled = true; button.textContent = 'Stopping…'; }
     try {
         await apiCall(`/api/v1/environments/${id}/stop`, { method: 'POST' });
-        showToast(`Stopping the preview for #${env.pr_number}.`);
+        showToast(`Stopping the preview for ${envLabel(env)}.`);
         await loadEnvironments();
         renderEnvironmentDetail();
         startAutoRefresh();
@@ -660,10 +671,10 @@ async function runRecovery(envId, index) {
     const [owner, repo] = fullName.split('/');
     if (action.kind === 'setup_guide') {
         closeEnvironmentDetail();
-        await openSetupGuide(owner, repo, env.pr_number);
+        await openSetupGuide(owner, repo, env.pr_number || null);
     } else if (action.kind === 'setup_check') {
         await openRepositoryView(fullName);
-        await checkPull(fullName, env.pr_number);
+        await checkPull(fullName, env.pr_number || null);
     } else if (action.kind === 'registry') {
         await openRepositoryView(fullName);
         await loadRegistries(owner, repo);
@@ -1434,7 +1445,7 @@ function renderTokens() {
             <tbody>
                 ${cachedTokens.map(token => `
                     <tr>
-                        <td>${escapeHtml(token.name || 'API Token')}</td>
+                        <td>${escapeHtml(token.name || 'API Token')}${token.scope === 'previews' ? `<div class="text-muted text-sm">Pipeline token: previews of ${escapeHtml(token.repository_full_name || '')} only</div>` : ''}</td>
                         <td class="mono text-muted">${escapeHtml(token.token_prefix)}...</td>
                         <td>${activeBadge(token.is_active && !token.revoked_at)}</td>
                         <td class="text-muted text-sm">${timeAgo(token.created_at)}</td>
@@ -1506,6 +1517,7 @@ async function deleteCredential(id) {
 async function generateToken() {
     const name = document.getElementById('tokenName').value;
     const desc = document.getElementById('tokenDesc').value;
+    const repository = (document.getElementById('tokenRepo').value || '').trim();
 
     if (!name.trim()) {
         showToast('Please enter a token name', 'error');
@@ -1517,13 +1529,15 @@ async function generateToken() {
             method: 'POST',
             body: JSON.stringify({
                 name: name,
-                description: desc || 'Generated from web dashboard'
+                description: desc || 'Generated from web dashboard',
+                ...(repository ? { repository } : {}),
             })
         });
 
         closeModal('tokenModal');
         document.getElementById('tokenName').value = '';
         document.getElementById('tokenDesc').value = '';
+        document.getElementById('tokenRepo').value = '';
 
         // Show the new token
         document.getElementById('newTokenValue').textContent = token.token;

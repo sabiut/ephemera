@@ -31,6 +31,23 @@ def create_token(
 
     WARNING: The full token is only shown once! Save it securely.
     """
+    scope, repository = None, None
+    if token_data.repository:
+        # A pipeline token: only for a repository the caller can see (the
+        # App is installed and they collaborate on it), only the previews API.
+        from app.api.dependencies import is_admin
+        from app.services import repo_access
+        from app.services.github import GitHubUnavailable
+        try:
+            repos = repo_access.accessible_repositories(current_user, is_admin(current_user))
+        except GitHubUnavailable:
+            raise HTTPException(status_code=503, detail="GitHub App integration is not configured on this server")
+        match = next((r for r in repos if r.full_name.lower() == token_data.repository.strip().lower()), None)
+        if match is None:
+            raise HTTPException(status_code=404,
+                                detail="Repository not found, or the Ephemera App is not installed on it")
+        scope, repository = "previews", match.full_name
+
     # Generate token; only its hash is persisted
     token = APIToken.generate_token()
     token_prefix = token[:8]  # First 8 chars for display
@@ -43,6 +60,8 @@ def create_token(
         description=token_data.description,
         expires_at=token_data.expires_at,
         is_active=True,
+        scope=scope,
+        repository_full_name=repository,
     )
 
     db.add(db_token)

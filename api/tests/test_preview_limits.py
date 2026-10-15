@@ -232,6 +232,6 @@ def test_the_lock_is_taken_before_the_limit_is_checked(db, user, limit, monkeypa
     order = []
     monkeypatch.setattr(provisioning, "_admission_lock", lambda db, repo: order.append("lock"))
     real_check = provisioning._check_limit
-    monkeypatch.setattr(provisioning, "_check_limit", lambda db, req: (order.append("check"), real_check(db, req)))
+    monkeypatch.setattr(provisioning, "_check_limit", lambda db, req, existing=None: (order.append("check"), real_check(db, req, existing)))
     request_environment(db, _request(user, pr=3))
     assert order == ["lock", "check"]

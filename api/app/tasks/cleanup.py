@@ -253,6 +253,11 @@ def retry_failed_environments(self, max_age_hours: int = 1):
             and_(Environment.status == EnvironmentStatus.FAILED, Environment.updated_at > cutoff_date)
         ).all()
         for env in failed_envs:
+            if env.is_pipeline:
+                # Its pipeline saw the failure and retries by deploying again;
+                # a preview changing behind its back would confuse that run.
+                skipped += 1
+                continue
             attempts = self.db.query(Deployment).filter(
                 Deployment.environment_id == env.id, Deployment.commit_sha == env.commit_sha
             ).count()

@@ -105,6 +105,25 @@ This usually takes 1-2 minutes. You'll receive another comment when it's ready!
     )
 
 
+def _remove_linked_pipeline_previews(repository_full_name: str, pr_number: int) -> None:
+    """Pipeline previews created with pull_request=N go when that pull request closes."""
+    from app.models import Environment
+
+    with SessionLocal() as db:
+        linked = db.query(Environment).filter(
+            environment_crud.same_repository(Environment.repository_full_name, repository_full_name),
+            Environment.source == "pipeline", Environment.linked_pr_number == pr_number,
+            Environment.status != EnvironmentStatus.DESTROYED,
+        ).all()
+        ids = []
+        for env in linked:
+            environment_crud.mark_closed(db, env)
+            ids.append(env.id)
+    for environment_id in ids:
+        destroy_environment.delay(environment_id=environment_id)
+        logger.info(f"Removing pipeline preview {environment_id}: its pull request #{pr_number} closed")
+
+
 def handle_pull_request_closed(payload: PullRequestWebhook):
     """Handle PR closed event - destroy the environment"""
     pr = payload.pull_request
@@ -112,6 +131,7 @@ def handle_pull_request_closed(payload: PullRequestWebhook):
     installation_id = github_service.get_installation_id_from_payload(payload.model_dump())
 
     logger.info(f"PR #{pr.number} closed in {repo.full_name}")
+    _remove_linked_pipeline_previews(repo.full_name, pr.number)
 
     with SessionLocal() as db:
         environment = environment_crud.get_environment_by_pr(db, repo.full_name, pr.number)

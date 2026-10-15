@@ -243,6 +243,7 @@ class UsageResponse(BaseModel):
     used: int
     limit: int                 # 0: unlimited
     pull_requests: List[int]   # PRs whose previews hold a slot
+    pipeline_previews: List[str] = []   # pipeline previews holding a slot (they share the limit)
 
 
 @router.get("/repositories/{owner}/{repo}/usage", response_model=UsageResponse)
@@ -251,7 +252,8 @@ async def repository_usage(owner: str, repo: str, db: Session = Depends(get_db),
     """How many of the repository's preview slots are in use ("3 of 5")."""
     installed = _accessible_repo(owner, repo, current_user)
     prs, limit = provisioning.repository_usage(db, installed.full_name)
-    return UsageResponse(used=len(prs), limit=limit, pull_requests=prs)
+    pipelines = provisioning.pipeline_usage(db, installed.full_name)
+    return UsageResponse(used=len(prs) + len(pipelines), limit=limit, pull_requests=prs, pipeline_previews=pipelines)
 
 
 def _managed_builds_available() -> None:
