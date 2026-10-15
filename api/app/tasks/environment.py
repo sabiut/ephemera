@@ -167,6 +167,9 @@ def _run_deployment(
     if not kubernetes_service.sync_pull_secret(namespace, docker_config, registries.PULL_SECRET_NAME):
         raise RuntimeError("Could not store the repository's registry credentials in the preview")
     deployment_service.set_pull_secret(namespace, registries.PULL_SECRET_NAME if docker_config else None)
+    # Of Ephemera's own registries, a preview may pull only from its
+    # repository's build slot (managed builds), never another repository's.
+    deployment_service.set_own_registry(namespace, managed_builds.own_registry(db, repo_full_name))
     protected = preview_access.is_protected(db, repo_full_name)
     deployment_service.set_protection(namespace, protected)
 

@@ -99,6 +99,13 @@ def slot_registry(slot: int) -> str:
     return f"{settings.managed_builds_region}-docker.pkg.dev/{settings.gcp_project_id}/ephemera-builds-{slot}"
 
 
+def own_registry(db: Session, repository_full_name: str) -> Optional[str]:
+    """The repository's slot registry, if it holds a build slot."""
+    row = db.query(RepositorySettings).filter(
+        func.lower(RepositorySettings.repository_full_name) == repository_full_name.lower()).first()
+    return slot_registry(row.build_slot) if row is not None and row.build_slot is not None else None
+
+
 def image_name(service: str) -> str:
     return re.sub(r"[^a-z0-9._-]+", "-", service.lower()).strip("._-") or "service"
 
@@ -488,11 +495,33 @@ def build_commit(
     gcp = gcp or gcp_client()
     source = source or fetch_source
 
-    def fail(category: str, message: str, detail: Optional[str] = None, status: str = "failed") -> BuildOutcome:
+    def fail(category: str, message: str, detail: Optional[str] = None, status: str = "failed",
+             duration: Optional[int] = None) -> BuildOutcome:
+        fields = {"duration_seconds": duration} if duration is not None else {}
         _record(db, record, status=status, failure_category=category, failure_detail=detail or message,
-                finished_at=datetime.now(timezone.utc))
+                finished_at=datetime.now(timezone.utc), **fields)
         outcome.error, outcome.category = message, category
+        outcome.duration_seconds = duration if duration is not None else outcome.duration_seconds
         return outcome
+
+    def cancel() -> int:
+        """
+        Cancel the build and return the time it ran: Cloud Build bills a
+        cancelled build for that, so it counts against the month's minutes
+        like any other (otherwise pushing just before each build finished
+        would build for free).
+        """
+        gcp.cancel_build(cloud_id)
+        _delete_source(gcp, slot, source_object)
+        try:
+            final = gcp.get_build(cloud_id)
+        except GCPError:
+            final = build
+        begun = _time(final.get("startTime"))
+        if begun is None:
+            return 0  # still queued: Cloud Build bills nothing
+        ended = _time(final.get("finishTime")) or datetime.now(timezone.utc)
+        return max(0, int((ended - begun).total_seconds()))
 
     names = ", ".join(s.name for s in services)
     stage("building", f"Fetching the source of {commit_sha[:7]}")
@@ -533,15 +562,12 @@ def build_commit(
             break
         newer = superseded()
         if newer:
-            gcp.cancel_build(cloud_id)
-            _delete_source(gcp, slot, source_object)
             return fail("build_superseded", f"A newer commit ({newer[:7]}) arrived; this build was cancelled.",
-                        status="cancelled")
+                        status="cancelled", duration=cancel())
         if clock() > deadline:
-            gcp.cancel_build(cloud_id)
-            _delete_source(gcp, slot, source_object)
             return fail("build_timeout", f"The build did not finish within "
-                        f"{settings.managed_builds_timeout_seconds // 60} minutes and was stopped.", status="timeout")
+                        f"{settings.managed_builds_timeout_seconds // 60} minutes and was stopped.", status="timeout",
+                        duration=cancel())
         progress = _progress(build)
         current = next((n for n, p in progress.items() if p == "building"), None)
         if build.get("status") in ("QUEUED", "PENDING", None):

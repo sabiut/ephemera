@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from kubernetes.client.rest import ApiException
 
+from app.config import settings
 from app.services import preview_access
 from app.services.compose import readiness_path
 from app.services.compose import build_only_blocker, classify_service, commit_variables, image_report, interpolate
@@ -96,7 +97,35 @@ def _references_secret(pod: Dict[str, Any], name: str) -> bool:
     return False
 
 
-def harden_deployment(manifest: Dict[str, Any]) -> Optional[str]:
+_GCR_HOSTS = {"gcr.io", "us.gcr.io", "eu.gcr.io", "asia.gcr.io"}
+
+
+def platform_image(image: str) -> bool:
+    """
+    Whether an image lives in this Google Cloud project's own registries
+    (Artifact Registry in any region, or Container Registry). The cluster's
+    nodes can pull every one of them, so without this check a preview could
+    run Ephemera's own images or another repository's managed builds.
+    """
+    project = (settings.gcp_project_id or "").lower()
+    if not project or not isinstance(image, str):
+        return False
+    host, _, path = image.strip().lower().partition("/")
+    owner = path.split("/", 1)[0]
+    return owner == project and (host.endswith("-docker.pkg.dev") or host == "docker.pkg.dev" or host in _GCR_HOSTS)
+
+
+def image_refusal(image: str, own_registry: Optional[str]) -> Optional[str]:
+    """Why a preview may not run this image, or None. own_registry: the repository's build slot, if it has one."""
+    if not platform_image(image):
+        return None
+    if own_registry and image.strip().lower().startswith(own_registry.lower().rstrip("/") + "/"):
+        return None
+    return (f"image {image} is in Ephemera's own registry; previews run images from your registries, "
+            "or the ones Ephemera built for this repository")
+
+
+def harden_deployment(manifest: Dict[str, Any], own_registry: Optional[str] = None) -> Optional[str]:
     """
     Apply the same pod hardening to every Deployment, whichever path wrote
     it: previously only AI-generated manifests got it. Mutates the manifest:
@@ -124,6 +153,9 @@ def harden_deployment(manifest: Dict[str, Any]) -> Optional[str]:
     for container in (pod.get("containers") or []) + (pod.get("initContainers") or []):
         if not isinstance(container, dict):
             continue
+        refused = image_refusal(container.get("image"), own_registry)
+        if refused:
+            return f"container {container.get('name')}: {refused}"
         sc = container.get("securityContext")
         if not isinstance(sc, dict):
             sc = container["securityContext"] = {}
@@ -269,6 +301,9 @@ class DeploymentService:
         # repository's registry credentials before it applies manifests; both
         # the converter and the AI path apply through this object.
         self.pull_secrets: Dict[str, str] = {}
+        # Per namespace: the repository's managed-builds registry (see image_refusal).
+        self.own_registries: Dict[str, str] = {}
+        self.last_refusal: Optional[str] = None
         # Namespaces whose repository protects its previews, set likewise.
         self.protected: set = set()
 
@@ -315,6 +350,13 @@ class DeploymentService:
             self.protected.add(namespace)
         else:
             self.protected.discard(namespace)
+
+    def set_own_registry(self, namespace: str, registry: Optional[str]) -> None:
+        """The repository's managed-builds registry: the only one of Ephemera's its previews may pull from."""
+        if registry:
+            self.own_registries[namespace] = registry
+        else:
+            self.own_registries.pop(namespace, None)
 
     def set_pull_secret(self, namespace: str, secret_name: Optional[str]) -> None:
         if secret_name:
@@ -589,9 +631,10 @@ class DeploymentService:
             return False
 
         if kind == "Deployment":
-            refused = harden_deployment(manifest)
+            refused = harden_deployment(manifest, self.own_registries.get(namespace))
             if refused:
                 logger.error(f"Refused Deployment/{name}: {refused}")
+                self.last_refusal = refused
                 return False
             pull_secret = self.pull_secrets.get(namespace)
             if pull_secret:
@@ -670,8 +713,10 @@ class DeploymentService:
             kind = manifest.get("kind", "")
             name = manifest.get("metadata", {}).get("name", "unknown")
 
+            self.last_refusal = None
             if not self.apply_manifest(manifest, revision=revision):
-                failed.append(f"{kind}/{name}")
+                # A refused Deployment says why (it reaches the PR comment).
+                failed.append(f"{kind}/{name}" + (f" ({self.last_refusal})" if self.last_refusal else ""))
                 continue
 
             applied += 1
