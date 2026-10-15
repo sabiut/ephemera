@@ -1012,6 +1012,11 @@
                     <label class="form-label">Description (optional)</label>
                     <input type="text" id="tokenDesc" class="form-input" placeholder="What is this token for?">
                 </div>
+                <div class="form-group">
+                    <label class="form-label">Repository (optional: makes a pipeline token)</label>
+                    <input type="text" id="tokenRepo" class="form-input" placeholder="owner/name">
+                    <p class="text-muted text-sm" style="margin-top:6px;">A pipeline token works only for previews of this repository (/api/v1/previews), which is all a CI pipeline needs. Leave empty for a full API token.</p>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-ghost" onclick="closeModal('tokenModal')">Cancel</button>

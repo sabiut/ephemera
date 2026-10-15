@@ -34,12 +34,13 @@ HOLDS_RESOURCES = (
 class PreviewLimitReached(Exception):
     """The repository already has PREVIEW_MAX_ACTIVE_PER_REPOSITORY previews."""
 
-    def __init__(self, limit: int, pr_numbers: List[int]):
+    def __init__(self, limit: int, pr_numbers: List[int], pipeline_names: Optional[List[str]] = None):
         self.limit = limit
         self.pr_numbers = pr_numbers
-        prs = ", ".join(f"#{n}" for n in pr_numbers)
+        self.pipeline_names = pipeline_names or []
+        held = [f"#{n}" for n in pr_numbers] + [f"pipeline preview {n}" for n in self.pipeline_names]
         super().__init__(
-            f"This repository already has {len(pr_numbers)} previews (the limit is {limit}): {prs}. "
+            f"This repository already has {len(held)} previews (the limit is {limit}): {', '.join(held)}. "
             "Stop one you don't need right now (Ephemera dashboard: Details, then Stop preview), "
             "close one of those pull requests, or wait for an idle one to expire. Then push a commit "
             "or retry the preview."
@@ -60,26 +61,46 @@ def _admission_lock(db: Session, repository_full_name: str) -> None:
     db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
 
-def repository_usage(db: Session, repository_full_name: str) -> "tuple[List[int], int]":
-    """(PR numbers holding a preview, the limit; 0 means unlimited) for a repository."""
-    rows = db.query(Environment.pr_number).filter(
+def _holding(db: Session, repository_full_name: str, exclude_id: Optional[int] = None):
+    """Previews of the repository holding cluster resources: (PR numbers, pipeline preview names)."""
+    query = db.query(Environment.pr_number, Environment.preview_name).filter(
         environment_crud.same_repository(Environment.repository_full_name, repository_full_name),
         Environment.status.in_(HOLDS_RESOURCES),
-    ).order_by(Environment.pr_number).all()
-    return [row[0] for row in rows], settings.preview_max_active_per_repository
+    )
+    if exclude_id is not None:
+        query = query.filter(Environment.id != exclude_id)
+    rows = query.all()
+    return (sorted(pr for pr, name in rows if pr is not None),
+            sorted(name for pr, name in rows if pr is None and name))
 
 
-def _check_limit(db: Session, req: "EnvironmentRequest") -> None:
+def repository_usage(db: Session, repository_full_name: str) -> "tuple[List[int], int]":
+    """(PR numbers holding a preview, the limit; 0 means unlimited) for a repository."""
+    prs, _ = _holding(db, repository_full_name)
+    return prs, settings.preview_max_active_per_repository
+
+
+def pipeline_usage(db: Session, repository_full_name: str) -> List[str]:
+    """Names of the repository's pipeline previews holding resources (they share the limit)."""
+    return _holding(db, repository_full_name)[1]
+
+
+def check_limit(db: Session, repository_full_name: str, exclude_id: Optional[int] = None) -> None:
+    """
+    A new or re-created preview must fit the repository's limit, which pull
+    request and pipeline previews share; the preview being reused never
+    counts against itself.
+    """
     limit = settings.preview_max_active_per_repository
     if limit <= 0:
         return
-    holding = db.query(Environment.pr_number).filter(
-        environment_crud.same_repository(Environment.repository_full_name, req.repository_full_name),
-        Environment.pr_number != req.pr_number,
-        Environment.status.in_(HOLDS_RESOURCES),
-    ).order_by(Environment.pr_number).all()
-    if len(holding) >= limit:
-        raise PreviewLimitReached(limit, [row[0] for row in holding])
+    prs, names = _holding(db, repository_full_name, exclude_id)
+    if len(prs) + len(names) >= limit:
+        raise PreviewLimitReached(limit, prs, names)
+
+
+def _check_limit(db: Session, req: "EnvironmentRequest", existing: Optional[Environment] = None) -> None:
+    check_limit(db, req.repository_full_name, existing.id if existing is not None else None)
 
 
 @dataclass
@@ -121,7 +142,7 @@ def request_environment(db: Session, req: EnvironmentRequest) -> Tuple[Environme
 
     # A new or re-created preview must fit the repository's limit; an
     # existing live one (above) never counts against itself.
-    _check_limit(db, req)
+    _check_limit(db, req, existing)
 
     env_url = github_service.build_environment_url(
         req.pr_number, req.repository_full_name, namespace=existing.namespace if existing else None)

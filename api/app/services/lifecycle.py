@@ -25,6 +25,18 @@ def last_activity(environment) -> Optional[datetime]:
 
 def expires_at(environment) -> Optional[datetime]:
     """When an idle preview will be removed, or None if expiry is off."""
+    if getattr(environment, "source", None) == "pipeline":
+        # A pipeline preview lives until its own deadline (ttl_hours), not
+        # until it has been idle: a pipeline that never deletes it is the
+        # case this covers. Keep available pushes the deadline back too.
+        deadline = getattr(environment, "pipeline_expires_at", None)
+        kept = getattr(environment, "kept_at", None)
+        if deadline is None:
+            return None
+        deadline = _aware(deadline)
+        if kept is not None:
+            deadline = max(deadline, _aware(kept) + timedelta(hours=settings.pipeline_preview_default_ttl_hours))
+        return deadline
     days = settings.preview_idle_days
     last = last_activity(environment)
     if days <= 0 or last is None:

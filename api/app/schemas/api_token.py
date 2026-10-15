@@ -12,6 +12,8 @@ class APITokenBase(BaseModel):
 class APITokenCreate(APITokenBase):
     """Schema for creating API tokens"""
     expires_at: Optional[datetime] = Field(None, description="Optional expiration date")
+    repository: Optional[str] = Field(
+        None, description="Make a pipeline token: limited to the previews API for this repository (owner/name)")
 
 
 class APITokenResponse(APITokenBase):
@@ -25,6 +27,8 @@ class APITokenResponse(APITokenBase):
     last_used_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
+    scope: Optional[str] = None                      # "previews" for a pipeline token
+    repository_full_name: Optional[str] = None       # the repository a pipeline token is for
 
     model_config = ConfigDict(from_attributes=True)
 

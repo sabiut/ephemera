@@ -7,6 +7,7 @@ These tasks handle async operations for Kubernetes environments including:
 - Application (re)deployment
 """
 
+import contextvars
 import logging
 import re
 import time
@@ -35,6 +36,16 @@ from app.services import managed_builds, preview_access, registries
 logger = logging.getLogger(__name__)
 
 STATUS_CONTEXT = "ephemera/environment"
+# The commit status this task reports under: a pipeline preview has its own
+# (a PR preview and a pipeline preview of the same commit must not overwrite
+# each other's). Set by _locked for the environment it runs for.
+_STATUS = contextvars.ContextVar("ephemera_status_context", default=STATUS_CONTEXT)
+
+
+def status_context(environment) -> str:
+    if environment is not None and getattr(environment, "source", None) == "pipeline":
+        return f"ephemera/preview/{environment.preview_name}"
+    return STATUS_CONTEXT
 FOOTER = "\n---\n*Powered by Ephemera*\n"
 
 
@@ -156,7 +167,7 @@ def _run_deployment(
                 try:
                     github_service.update_pr_status(
                         installation_id=installation_id, repo_full_name=repo_full_name, commit_sha=commit_sha,
-                        state="pending", description=detail[:140], context=STATUS_CONTEXT,
+                        state="pending", description=detail[:140], context=_STATUS.get(),
                         target_url=_dashboard_url(environment_id))
                 except Exception as e:
                     logger.warning(f"Could not post build progress for environment {environment_id}: {e}")
@@ -175,7 +186,24 @@ def _run_deployment(
     deployment_service.set_protection(namespace, protected)
 
     build = None
-    if managed_builds.active_settings(db, repo_full_name) is not None:
+    environment = environment_crud.get_environment(db, environment_id)
+    pipeline = environment is not None and environment.is_pipeline
+    if pipeline:
+        # A pipeline preview runs the images its pipeline built and sent
+        # (docs/ci-pipeline.md), with the compose file it sent or the
+        # repository's at the commit. Nothing is built here, and the compose
+        # converter, not the AI planner, applies the images exactly.
+        stage("deploying", "Applying the images the pipeline sent")
+        overrides = dict(environment.image_overrides or {})
+        result = deployment_service.deploy_application(
+            installation_id=installation_id, repo_full_name=repo_full_name, namespace=namespace,
+            ref=commit_sha, built_images=overrides, compose_content=environment.compose_override,
+        )
+        unknown = sorted(set(overrides) - set(result.get("services") or []) - set(result.get("skipped_services") or []))
+        if unknown and result.get("compose_found", True):
+            result.setdefault("warnings", []).append(
+                f"images were sent for services the compose file doesn't have: {', '.join(unknown)}")
+    elif managed_builds.active_settings(db, repo_full_name) is not None:
         # Ephemera builds this repository's build-only services from the
         # commit first; the deploy then runs the images it pushed.
         compose_text = deployment_service.fetch_docker_compose(installation_id, repo_full_name, commit_sha)
@@ -184,28 +212,29 @@ def _run_deployment(
             compose_text, stage=stage, superseded=lambda: _superseded_by(db, environment_id, commit_sha),
         )
 
-    if build is not None and build.wait:
-        # No room to build now: the task runs again shortly (see _locked).
-        return {"success": False, "build_wait": build.wait, "commit_sha": commit_sha}
-    if build is not None and build.error:
-        result = {"success": False, "compose_found": True, "error": build.error, "services": [],
-                  "service_urls": {}, "build_category": build.category, "build_id": build.build_id}
-    else:
-        stage("deploying", "Reading docker-compose.yml and applying the services")
-        if build is not None:
-            # The compose converter, not the AI planner: the built images are
-            # already decided and must be used exactly.
-            result = deployment_service.deploy_application(
-                installation_id=installation_id, repo_full_name=repo_full_name, namespace=namespace,
-                ref=commit_sha, built_images=build.images, compose_content=compose_text,
-            )
+    if not pipeline:
+        if build is not None and build.wait:
+            # No room to build now: the task runs again shortly (see _locked).
+            return {"success": False, "build_wait": build.wait, "commit_sha": commit_sha}
+        if build is not None and build.error:
+            result = {"success": False, "compose_found": True, "error": build.error, "services": [],
+                      "service_urls": {}, "build_category": build.category, "build_id": build.build_id}
         else:
-            result = _active_deployment_service().deploy_application(
-                installation_id=installation_id,
-                repo_full_name=repo_full_name,
-                namespace=namespace,
-                ref=commit_sha,
-            )
+            stage("deploying", "Reading docker-compose.yml and applying the services")
+            if build is not None:
+                # The compose converter, not the AI planner: the built images are
+                # already decided and must be used exactly.
+                result = deployment_service.deploy_application(
+                    installation_id=installation_id, repo_full_name=repo_full_name, namespace=namespace,
+                    ref=commit_sha, built_images=build.images, compose_content=compose_text,
+                )
+            else:
+                result = _active_deployment_service().deploy_application(
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                    namespace=namespace,
+                    ref=commit_sha,
+                )
     if build is not None:
         result["managed_build"] = {"services": sorted(build.images), "duration_seconds": build.duration_seconds,
                                    "notes": build.notes, "build_id": build.build_id}
@@ -259,6 +288,7 @@ def _run_deployment(
                     commit_sha=commit_sha,
                     state="pending",
                     description=f"Waiting for {service} image built from {commit_sha[:7]}",
+                    context=_STATUS.get(),
                 )
 
             stage("starting", f"Starting {', '.join(services)}")
@@ -431,7 +461,7 @@ def _notify(
             commit_sha=commit_sha,
             state=state,
             description=description,
-            context=STATUS_CONTEXT,
+            context=_STATUS.get(),
             target_url=target_url,
         )
     if pr_number and comment:
@@ -526,7 +556,7 @@ def _provision_body(
 
     installation_id = installation_id or environment.installation_id
     repo_full_name = repo_full_name or environment.repository_full_name
-    pr_number = pr_number or environment.pr_number
+    pr_number = pr_number or environment.notify_pr_number
     commit_sha = commit_sha or environment.commit_sha
 
     environment_crud.update_environment_status(self.db, environment, EnvironmentStatus.PROVISIONING)
@@ -678,7 +708,7 @@ def _destroy_body(
 
         installation_id = installation_id or environment.installation_id
         repo_full_name = repo_full_name or environment.repository_full_name
-        pr_number = pr_number or environment.pr_number
+        pr_number = pr_number or environment.notify_pr_number
         if stopped and installation_id and repo_full_name and pr_number:
             who = f" by @{stopped_by}" if stopped_by else ""
             comment = f"""## Preview Stopped
@@ -739,7 +769,7 @@ def _update_body(
 
     installation_id = installation_id or environment.installation_id
     repo_full_name = repo_full_name or environment.repository_full_name
-    pr_number = pr_number or environment.pr_number
+    pr_number = pr_number or environment.notify_pr_number
 
     try:
         exists = kubernetes_service.namespace_exists(environment.namespace)
@@ -896,6 +926,14 @@ def _apply_access_body(self, environment_id: int):
 
 def _locked(task, environment_id: int, commit_sha: Optional[str], deployment_id: Optional[int], run,
             teardown: bool = False, notify=(None, None, None), expiry: bool = False, stop: bool = False):
+    token = _STATUS.set(status_context(environment_crud.get_environment(task.db, environment_id)))
+    try:
+        return _locked_body(task, environment_id, commit_sha, deployment_id, run, teardown, notify, expiry, stop)
+    finally:
+        _STATUS.reset(token)
+
+
+def _locked_body(task, environment_id, commit_sha, deployment_id, run, teardown, notify, expiry, stop):
     with environment_lock(environment_id) as state:
         if state != HELD:
             return _reschedule(task, environment_id, commit_sha, deployment_id, state, teardown, notify)
@@ -989,6 +1027,6 @@ def _reschedule(task, environment_id: int, commit_sha: Optional[str], deployment
 
 Push a new commit to try again.{FOOTER}"""
         _notify(installation_id or environment.installation_id, repo_full_name or environment.repository_full_name,
-                pr_number or environment.pr_number, commit_sha or environment.commit_sha,
+                pr_number or environment.notify_pr_number, commit_sha or environment.commit_sha,
                 "failure", "Timed out waiting to deploy", comment)
     return {"success": False, "environment_id": environment_id, "error": message}

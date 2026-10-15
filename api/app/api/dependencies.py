@@ -108,14 +108,24 @@ def authenticate_token(
     return user, token
 
 
+PIPELINE_PATH = "/api/v1/previews"
+
+
 def _authenticate_request(request: Request, db: Session) -> Tuple[User, APIToken]:
-    return authenticate_token(
+    user, token = authenticate_token(
         db,
         request.headers.get("authorization"),
         session_cookie=request.cookies.get(SESSION_COOKIE),
         method=request.method,
         requested_with=request.headers.get(CSRF_HEADER),
     )
+    # A pipeline token (scope "previews") opens the previews API and nothing
+    # else; which repository it may use is checked there.
+    path = request.url.path.rstrip("/")
+    if token.scope and not (path == PIPELINE_PATH or path.startswith(PIPELINE_PATH + "/")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="This token is limited to the previews API (/api/v1/previews)")
+    return user, token
 
 
 async def get_current_token(request: Request, db: Session = Depends(get_db)) -> APIToken:
