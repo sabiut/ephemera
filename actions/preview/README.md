@@ -58,7 +58,7 @@ The preview is removed when the job ends. Set `keep: true` to leave it running f
 
 ## Outputs
 
-`url` (the main link), `urls` (JSON, every public service), `id`, `status`.
+`url` (the main link), `urls` (JSON, every public service), `id`, `status`, and `exit-code` (the CLI's: 0 ready, 1 failed, 2 usage, 3 timed out, 4 refused or unreachable).
 
 ## How it works
 
