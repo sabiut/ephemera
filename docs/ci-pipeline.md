@@ -189,6 +189,15 @@ Who may deploy: the token's owner must be a collaborator on the repository (chec
    - Action: outputs `access-header` and `access-token`, issued for `access-minutes` (default 30) once the preview is ready, and **masked** in the job log before they could appear.
    - Use with Playwright: `extraHTTPHeaders: {'X-Ephemera-Access': process.env.EPHEMERA_ACCESS}`; with curl: `-H "$EPHEMERA_ACCESS_HEADER"`.
 5. **End-to-end**: a pipeline variant of the e2e test (build the test app's image in Actions, deploy it by digest, run a request against the URL, delete).
+   - `.github/workflows/e2e-pipeline.yml` (run by hand: Actions → "End-to-end pipeline preview").
+     - It checks out the test app and builds its image with a marker unique to the run (`GIT_SHA=e2e-<run>-1`, which the app's page prints).
+     - It pushes the image to `ghcr.io/<owner>/ephemera-e2e-pipeline`, deploys it by digest **with the Action**, and checks the page shows the marker. That proves the preview runs exactly the image this pipeline built.
+     - It builds image 2 and deploys under the same name with the CLI, then checks **the same link** now serves it.
+     - It checks an older `--serial` is refused (exit 4, "newer run").
+     - With `protected`, it also checks that an anonymous visitor is sent to sign in while the Action's masked `access-header` gets through. Protection is switched off again afterwards, even on failure.
+     - A second job confirms the Action's post step **removed** the preview when the job ended.
+   - It needs the secret `E2E_PIPELINE_TOKEN`: a pipeline token for the test repository. The protected variant also uses `EPHEMERA_TOKEN`.
+   - The GHCR package starts private. Make it public once, or the first run fails with "Image is private", which is itself a check of that diagnosis.
 6. **OIDC** (v2).
 
 ## Decisions
