@@ -260,6 +260,47 @@ def _record_installed(event: str, payload: dict) -> None:
         db.close()
 
 
+def _release_removed(event: str, payload: dict) -> None:
+    """
+    The App was removed from repositories: turn managed builds off for them,
+    so the hourly cleanup wipes their build slots and frees the places for
+    other repositories (a slot was otherwise held for good).
+    """
+    action = payload.get("action")
+    installation_id = (payload.get("installation") or {}).get("id")
+    if (event, action) == ("installation", "deleted"):
+        names = {r.get("full_name") for r in payload.get("repositories") or []}
+    elif (event, action) == ("installation_repositories", "removed"):
+        names = {r.get("full_name") for r in payload.get("repositories_removed") or []}
+        installation_id = None  # the installation stays; only these repositories left it
+    else:
+        return
+    from sqlalchemy import func
+    from app.database import SessionLocal
+    from app.models import Environment, RepositorySettings
+
+    db = SessionLocal()
+    try:
+        if installation_id:
+            # An installation on "all repositories" doesn't list them: its
+            # previews do.
+            names |= {r for (r,) in db.query(Environment.repository_full_name)
+                      .filter(Environment.installation_id == installation_id).distinct()}
+        names = {n.lower() for n in names if n}
+        if not names:
+            return
+        rows = db.query(RepositorySettings).filter(func.lower(RepositorySettings.repository_full_name).in_(names),
+                                                   RepositorySettings.managed_builds_enabled.is_(True)).all()
+        for row in rows:
+            row.managed_builds_enabled = False
+            row.build_plan_confirmed = None
+            row.updated_by_login = "github-app-removed"
+            logger.info(f"Managed builds turned off for {row.repository_full_name}: the App was removed")
+        db.commit()
+    finally:
+        db.close()
+
+
 @router.post("/github")
 async def github_webhook(
     request: Request,
@@ -292,6 +333,7 @@ async def github_webhook(
         # load instead of after the cache expires.
         repo_access.invalidate()
         _record_installed(x_github_event, payload)
+        _release_removed(x_github_event, payload)
         logger.info(f"Installation changed ({x_github_event}/{payload.get('action')}); repository access refreshed")
         return {"status": "received", "event": x_github_event, "action": payload.get("action")}
 
