@@ -46,6 +46,8 @@ ephemera preview access-header --repo acme/shop --name pr-142 --minutes 30
 
 `EPHEMERA_URL` points the CLI at another Ephemera server.
 
+**No stored token in GitHub Actions:** with `EPHEMERA_TOKEN` unset, in a job with `permissions: id-token: write`, the CLI requests the job's OIDC identity token (audience `ephemera`, or `EPHEMERA_OIDC_AUDIENCE`) and exchanges it for a 1-hour pipeline token. The repository must allow it in Ephemera (Repositories → CI pipelines).
+
 ## Development
 
 Standard library only. Tests: `pytest` in this directory. `api/tests/test_cli_contract.py` runs the CLI against the real API in process. Releases: tag `cli-vX.Y.Z` (after bumping `ephemera_cli/__version__`).

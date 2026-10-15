@@ -24,5 +24,8 @@ class RepositorySettings(Base):
     # The build slot (service account and registry, created by Terraform)
     # this repository builds as; assigned on its first build, never shared.
     build_slot = Column(Integer, unique=True, nullable=True)
+    # GitHub Actions in this repository may deploy its pipeline previews with
+    # their OIDC identity instead of a stored token (docs/ci-pipeline.md).
+    github_actions_oidc = Column(Boolean, default=False, nullable=False)
     updated_by_login = Column(String, nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

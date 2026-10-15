@@ -834,6 +834,8 @@ async function selectRepository(fullName) {
     pullsCard.hidden = false;
     document.getElementById('repoRegistriesCard').hidden = false;
     document.getElementById('repoAccessCard').hidden = false;
+    document.getElementById('repoPipelinesCard').hidden = false;
+    loadPipelines(owner, repo);
     loadRegistries(owner, repo);
     loadAccess(owner, repo);
     userInfoLoaded.then(() => {  // features come from /auth/me
@@ -1206,6 +1208,41 @@ async function loadMetrics() {
     } catch (e) {
         body.innerHTML = `<div class="empty-state"><p>Could not load metrics. ${escapeHtml(e.message)}</p></div>`;
     }
+}
+
+// ─── CI pipelines (docs/ci-pipeline.md) ─────────────────
+
+async function loadPipelines(owner, repo) {
+    const body = document.getElementById('repoPipelinesBody');
+    const o = escapeHtml(owner), r = escapeHtml(repo);
+    let p;
+    try {
+        p = await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pipelines`);
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p>Could not load pipeline settings. ${escapeHtml(e.message)}</p></div>`;
+        return;
+    }
+    document.getElementById('repoPipelinesMeta').textContent = p.updated_by_login ? `Set by ${p.updated_by_login}` : '';
+    body.innerHTML = `<p class="reg-help" style="padding-top:16px;">A pipeline that builds its own images can deploy a preview with <code>ephemera preview deploy</code> or the GitHub Action <code>sabiut/ephemera/actions/preview</code>. It authenticates with a pipeline token (API Tokens, with this repository filled in), or, in GitHub Actions, with no stored secret at all:</p>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:6px 20px 12px;cursor:pointer;">
+            <input type="checkbox" ${p.github_actions_oidc ? 'checked' : ''} onchange="savePipelines('${o}', '${r}', this.checked, this)" style="margin-top:4px;">
+            <span><strong style="color:#fff;">Let this repository's GitHub Actions deploy previews with OIDC</strong><br>
+            <span class="text-muted text-sm">Jobs with <code>permissions: id-token: write</code> prove they run in ${escapeHtml(owner + '/' + repo)} (audience <code>${escapeHtml(p.audience)}</code>) and get a 1-hour pipeline token. Anyone who can run a workflow here can then deploy this repository's previews, as with a token in its secrets. Pull requests from forks get no identity token.</span></span>
+        </label>`;
+}
+
+async function savePipelines(owner, repo, enabled, box) {
+    box.disabled = true;
+    try {
+        await apiCall(`/api/v1/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pipelines`, {
+            method: 'PUT', body: JSON.stringify({ github_actions_oidc: enabled }),
+        });
+        showToast(enabled ? `GitHub Actions in ${owner}/${repo} can now deploy previews with OIDC.`
+                          : `OIDC is off for ${owner}/${repo}; its pipelines need a token again.`);
+    } catch (e) {
+        showToast('Could not change it: ' + e.message, 'error');
+    }
+    await loadPipelines(owner, repo);
 }
 
 // ─── Private images (registry credentials) ──────────────

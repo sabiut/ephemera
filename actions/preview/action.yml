@@ -7,8 +7,9 @@ branding:
 
 inputs:
   token:
-    description: "A pipeline token from the Ephemera dashboard (API Tokens, with the repository filled in). Store it as a secret."
-    required: true
+    description: "A pipeline token from the Ephemera dashboard, stored as a secret. Leave empty to use OIDC instead: give the job permissions id-token: write, and allow GitHub Actions OIDC on the repository's page in Ephemera."
+    required: false
+    default: ''
   name:
     description: "The preview's name, for example pr-142 (from github.event.number). Deploying the same name again updates it."
     required: true

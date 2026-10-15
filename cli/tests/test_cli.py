@@ -57,7 +57,8 @@ class FakeApi:
 @pytest.fixture(autouse=True)
 def env(monkeypatch, tmp_path):
     for var in ("GITHUB_SHA", "GITHUB_REPOSITORY", "GITHUB_EVENT_PATH", "CI_COMMIT_SHA", "GIT_COMMIT",
-                "EPHEMERA_COMMIT", "EPHEMERA_REPOSITORY", "EPHEMERA_URL"):
+                "EPHEMERA_COMMIT", "EPHEMERA_REPOSITORY", "EPHEMERA_URL", "ACTIONS_ID_TOKEN_REQUEST_URL",
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "EPHEMERA_OIDC_AUDIENCE"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("EPHEMERA_TOKEN", "eph_test")
 
@@ -139,7 +140,7 @@ def test_usage_errors_exit_2(capsys, args, words):
 def test_no_token_exits_2(capsys, monkeypatch):
     monkeypatch.delenv("EPHEMERA_TOKEN")
     code, _, err = _run(DEPLOY, FakeApi(), capsys)
-    assert code == 2 and "set EPHEMERA_TOKEN" in err
+    assert code == 2 and "set EPHEMERA_TOKEN" in err and "id-token: write" in err
 
 
 def test_a_github_pull_request_uses_the_head_commit_not_the_merge_commit(capsys, monkeypatch, tmp_path):
@@ -208,3 +209,47 @@ def test_an_access_header_for_tests(capsys):
     api.protected = False
     _, out, err = _run(["preview", "access-header", "--id", "7", "--format", "json"], api, capsys)
     assert json.loads(out)["value"] == "signed.value" and "previews are public" in err
+
+
+def test_in_github_actions_without_a_token_it_uses_oidc(capsys, monkeypatch):
+    monkeypatch.delenv("EPHEMERA_TOKEN")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://pipelines.actions.test/idtoken?api-version=2.0")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "runner-secret")
+    api = FakeApi()
+    seen = []
+
+    def send(method, url, headers, data):
+        seen.append((method, url, headers.get("Authorization"), json.loads(data) if data else None))
+        if url.startswith("https://pipelines.actions.test/"):
+            return 200, json.dumps({"value": "github.identity.jwt"}).encode()
+        if url.endswith("/api/v1/oidc/token"):
+            return 200, json.dumps({"token": "eph_exchanged", "repository": "acme/shop", "expires_in": 3600}).encode()
+        return api(method, url, headers, data)
+    code = cli.main(DEPLOY, send=send)
+    err = capsys.readouterr().err
+    assert code == 0 and "using GitHub Actions OIDC: a pipeline token for acme/shop (60 minutes)" in err
+    assert seen[0] == ("GET", "https://pipelines.actions.test/idtoken?api-version=2.0&audience=ephemera",
+                       "Bearer runner-secret", None)
+    assert seen[1][1].endswith("/api/v1/oidc/token") and seen[1][2] is None and seen[1][3] == {"token": "github.identity.jwt"}
+    assert seen[2][2] == "Bearer eph_exchanged"         # the deploy uses the exchanged token
+
+
+def test_an_explicit_token_wins_over_oidc(capsys, monkeypatch):
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://pipelines.actions.test/idtoken")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "runner-secret")
+    api = FakeApi()
+    _run(DEPLOY, api, capsys)
+    assert api.calls[0][2]["Authorization"] == "Bearer eph_test"
+
+
+def test_a_refused_exchange_exits_4_with_the_reason(capsys, monkeypatch):
+    monkeypatch.delenv("EPHEMERA_TOKEN")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://pipelines.actions.test/idtoken")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "runner-secret")
+
+    def send(method, url, headers, data):
+        if url.startswith("https://pipelines.actions.test/"):
+            return 200, json.dumps({"value": "jwt"}).encode()
+        return 403, json.dumps({"detail": "acme/shop doesn't let GitHub Actions deploy previews with OIDC"}).encode()
+    code = cli.main(DEPLOY, send=send)
+    assert code == 4 and "doesn't let GitHub Actions deploy previews with OIDC" in capsys.readouterr().err

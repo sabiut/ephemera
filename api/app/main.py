@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import admin, auth, credentials, environments, health, preview_auth, previews, repositories, tokens, webhooks
+from app.api import admin, auth, credentials, environments, health, oidc, preview_auth, previews, repositories, tokens, webhooks
 from app.config import get_settings
 from app.services.github import github_service
 
@@ -55,6 +55,7 @@ app.include_router(tokens.router, prefix="/api/v1", tags=["tokens"])
 app.include_router(repositories.router, prefix="/api/v1", tags=["repositories"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 app.include_router(previews.router, prefix="/api/v1", tags=["previews"])
+app.include_router(oidc.router, prefix="/api/v1", tags=["previews"])
 app.include_router(preview_auth.router)
 
 

@@ -52,8 +52,9 @@ class Api:
         self.send = send or _urllib_send
 
     def call(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Any:
-        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/json",
-                   "User-Agent": f"ephemera-cli/{__version__}"}
+        headers = {"Accept": "application/json", "User-Agent": f"ephemera-cli/{__version__}"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         data = None
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -309,13 +310,41 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def oidc_token(base_url: str, send: Callable) -> Optional[str]:
+    """
+    In a GitHub Actions job with `permissions: id-token: write`: GitHub's
+    identity token for this job, exchanged for a short-lived Ephemera pipeline
+    token (docs/ci-pipeline.md, step 6). None outside such a job.
+    """
+    request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
+    request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not request_url or not request_token:
+        return None
+    audience = os.environ.get("EPHEMERA_OIDC_AUDIENCE", "ephemera")
+    sep = "&" if "?" in request_url else "?"
+    try:
+        status, raw = send("GET", f"{request_url}{sep}audience={urllib.parse.quote(audience)}",
+                           {"Authorization": f"Bearer {request_token}", "Accept": "application/json"}, None)
+    except OSError as e:
+        raise CliError(f"could not get this job's identity token from GitHub: {e}", API)
+    if status >= 400:
+        raise CliError(f"GitHub refused this job's identity token ({status})", API)
+    identity = json.loads(raw)["value"]
+    exchanged = Api(base_url, "", send).call("POST", "/api/v1/oidc/token", {"token": identity})
+    _say(f"using GitHub Actions OIDC: a pipeline token for {exchanged.get('repository')} "
+         f"({exchanged.get('expires_in', 0) // 60} minutes)")
+    return exchanged["token"]
+
+
 def main(argv: Optional[List[str]] = None, send: Optional[Callable] = None, **wait_kw) -> int:
     args = build_parser().parse_args(argv)
-    token = os.environ.get("EPHEMERA_TOKEN")
+    send = send or _urllib_send
     try:
+        token = os.environ.get("EPHEMERA_TOKEN") or oidc_token(args.url, send)
         if not token:
             raise CliError("set EPHEMERA_TOKEN to a pipeline token from the Ephemera dashboard (API Tokens, "
-                           "with the repository filled in)")
+                           "with the repository filled in), or, in GitHub Actions, give the job "
+                           "`permissions: id-token: write` (the repository must allow OIDC in Ephemera)")
         return args.run(Api(args.url, token, send), args, **wait_kw)
     except CliError as e:
         _say(f"ephemera: {e}")
