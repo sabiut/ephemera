@@ -122,6 +122,19 @@ def allowlisted(repository_full_name: str) -> bool:
     return "*" in allowed or (repository_full_name or "").lower() in allowed
 
 
+def state(db: Session, repository_full_name: str) -> str:
+    """
+    "on": Ephemera builds this repository's build-only services; "available":
+    it could, once a collaborator turns managed builds on; "unavailable": not
+    on this server (or not for this repository), so images come from CI.
+    """
+    if active_settings(db, repository_full_name) is not None:
+        return "on"
+    if settings.managed_builds_enabled and allowlisted(repository_full_name):
+        return "available"
+    return "unavailable"
+
+
 def slots_free(db: Session) -> int:
     used = db.query(RepositorySettings).filter(RepositorySettings.build_slot.isnot(None)).count()
     return max(0, settings.managed_builds_slots - used)

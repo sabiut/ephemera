@@ -864,12 +864,17 @@ async function runSetupCheck(owner, repo, prNumber = null) {
         const checks = [...r.checks].sort((a, b) => order[a.level] - order[b.level]);
         // Configuration only: whether CI published the image and the cluster
         // can pull it is only known once a preview deploys.
+        // Where Ephemera can build the images itself, that comes first; the
+        // CI workflow stays as the alternative.
+        const managedButton = r.needs_image_setup && r.managed_builds === 'available'
+            ? `<button class="btn btn-primary btn-sm" onclick="document.getElementById('repoBuildsCard').scrollIntoView({ behavior: 'smooth', block: 'start' })">Let Ephemera build it</button> `
+            : '';
         const guideButton = r.needs_image_setup
-            ? `<p style="margin:0 20px 16px;"><button class="btn btn-primary btn-sm" onclick="openSetupGuide('${escapeHtml(owner)}', '${escapeHtml(repo)}'${prNumber ? `, ${prNumber}` : ''})">Set up image builds</button>
-               <span class="text-muted text-sm">Generates the CI workflow and compose lines for this repository.</span></p>`
+            ? `<p style="margin:0 20px 16px;">${managedButton}<button class="btn ${managedButton ? 'btn-ghost' : 'btn-primary'} btn-sm" onclick="openSetupGuide('${escapeHtml(owner)}', '${escapeHtml(repo)}'${prNumber ? `, ${prNumber}` : ''})">${managedButton ? 'Build in my CI instead' : 'Set up image builds'}</button>
+               <span class="text-muted text-sm">${managedButton ? 'Managed builds need no workflow or registry token.' : 'Generates the CI workflow and compose lines for this repository.'}</span></p>`
             : '';
         const verdict = r.ready
-            ? `<p class="notice" style="margin:16px 20px;"><strong>Configuration checks passed.</strong> Image availability is verified when a preview deploys: CI must push each image before Ephemera can start it. Open a pull request, or create a preview below.${back}</p>`
+            ? `<p class="notice" style="margin:16px 20px;"><strong>Configuration checks passed.</strong> ${r.managed_builds === 'on' ? 'Ephemera builds the services marked "built by Ephemera" from each commit; other images are checked when a preview deploys.' : 'Image availability is verified when a preview deploys: CI must push each image before Ephemera can start it.'} Open a pull request, or create a preview below.${back}</p>`
             : `<p class="notice" style="margin:16px 20px;"><strong>Fix the errors below before previews can work.</strong> Warnings will not stop a preview but may make it behave differently from docker compose.${back}</p>`;
         const services = r.services.length ? `<table class="table"><thead><tr><th>Service</th><th>Image</th><th>Deploys</th><th>Tag per commit</th><th>Link</th></tr></thead><tbody>
             ${r.services.map(s => `<tr>
@@ -924,7 +929,7 @@ function renderSetupGuide(g) {
     }
     const services = g.services.map(s => `<code>${escapeHtml(s.name)}</code>`).join(', ');
     body.innerHTML = `
-        <p style="color:#bbb;margin-top:0;">${richText(g.message)} Ephemera runs images; it doesn't build them. These changes make your CI build ${services} for every commit, so each preview runs that commit's code.</p>
+        <p style="color:#bbb;margin-top:0;">${richText(g.message)} This is the route for building images in your own CI${features.managed_builds ? ' (managed builds, on the Repositories page, need none of this)' : ''}: these changes make your CI build ${services} for every commit, so each preview runs that commit's code.</p>
         <div class="guide-step">
             <h3><span class="num">1</span>Add this workflow</h3>
             <p>Create <span class="code-path">${escapeHtml(g.workflow_path)}</span> with:</p>
@@ -975,7 +980,7 @@ function accessHTML(owner, repo, s) {
     return `<div style="padding:6px 0;">
         ${option('false', 'Anyone with the link', 'Preview links are public. Fine for open-source work and demos without real data.')}
         ${option('true', 'Collaborators only', 'Viewers sign in with GitHub; only the PR author, the repository\'s collaborators and Ephemera admins get in.')}
-    </div><p class="reg-help" id="repoAccessState">${accessStateText(s)}</p>
+    </div>${s.private && !s.updated_by_login ? '<p class="reg-help">This repository is private, so its previews are collaborators-only unless you choose otherwise.</p>' : ''}<p class="reg-help" id="repoAccessState">${accessStateText(s)}</p>
     ${s.previews_failed ? `<p style="padding:0 20px 16px;"><button class="btn btn-primary btn-sm" onclick="saveAccess('${escapeHtml(owner)}', '${escapeHtml(repo)}', ${s.protect_previews})">Try again</button></p>` : ''}`;
 }
 

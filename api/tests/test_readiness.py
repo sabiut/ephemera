@@ -237,7 +237,7 @@ def test_all_services_skipped_is_a_failure_with_the_reason(db_session, environme
     result = _run(db_session, environment)
     assert result["success"] is False
     assert "build-only (web, worker)" in result["error"]
-    assert "publish an image" in result["error"]
+    assert "push an image for each commit" in result["error"]  # how to get one (and managed builds, where offered)
 
 
 def test_pods_that_never_become_ready_fail_with_the_kubernetes_reason(db_session, environment, wired):

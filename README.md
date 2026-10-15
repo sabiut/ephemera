@@ -136,7 +136,11 @@ Cloud credentials and API tokens sit under **Advanced**: previews created from p
 
 ## Previewing a pull request's own code
 
-Ephemera deploys images; it does not build them. For a preview to contain the pull request's changes, the repository's CI builds an image per commit and the compose file refers to it with `${EPHEMERA_SHA}`, which Ephemera replaces with the PR's head commit:
+There are two ways for a preview to contain the pull request's changes.
+
+**Managed builds (beta): Ephemera builds them.** Turn on managed builds on the repository's page in the dashboard, and each service that has `build:` without a per-commit `image:` is built from the pull request's commit. No CI workflow, registry or token is needed. The dashboard shows what will be built before you turn it on, and which build options aren't supported yet. Limits, security and cost are described in [docs/managed-builds.md](docs/managed-builds.md).
+
+**Your own CI builds them.** The repository's CI builds an image per commit, and the compose file refers to it with `${EPHEMERA_SHA}`, which Ephemera replaces with the PR's head commit. Ephemera then runs that image rather than building:
 
 ```yaml
 # docker-compose.yml

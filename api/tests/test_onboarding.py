@@ -136,7 +136,6 @@ def github(monkeypatch):
 
 def test_check_endpoint_returns_the_report(client, auth_headers, github, monkeypatch):
     monkeypatch.setattr(setup_check, "_fetch_compose", lambda repo, ref: ("compose.yml", "services:\n  web:\n    image: nginx\n    ports: ['80']\n"))
-    monkeypatch.setattr(setup_check.check_repository, "__defaults__", (None, setup_check._fetch_compose))
     body = client.get("/api/v1/repositories/acme/app/check", headers=auth_headers).json()
     assert body["repository"] == "acme/app" and body["compose_file"] == "compose.yml"
     assert body["ready"] is True
@@ -178,7 +177,7 @@ def test_check_endpoint_can_check_a_pull_requests_commit(client, auth_headers, g
         seen["ref"] = ref
         return "docker-compose.yml", "services:\n  web:\n    image: nginx\n    ports: ['80']\n"
 
-    monkeypatch.setattr(setup_check.check_repository, "__defaults__", (None, fetch))
+    monkeypatch.setattr(setup_check, "_fetch_compose", fetch)
     github.get_pull_request = lambda installation_id, full_name, number: PullRequestInfo(
         number, "Add login", "open", "c" * 40, "login", 1, "octocat", None)
     body = client.get("/api/v1/repositories/acme/app/check?pr=5", headers=auth_headers).json()

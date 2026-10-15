@@ -253,7 +253,7 @@ def test_collaborators_switch_protection_per_repository(client, auth_headers, mo
 
     class FakeGitHub:
         def list_installed_repositories(self):
-            return [InstalledRepository(REPO, "app", 1, True, "main", "")]
+            return [InstalledRepository(REPO, "app", 1, False, "main", "")]  # public: starts public
 
         def is_collaborator(self, *a):
             return True

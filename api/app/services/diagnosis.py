@@ -82,6 +82,11 @@ _ACTIONS: Dict[str, List[Dict[str, str]]] = {
 
 
 def _actions(category: str, error: str) -> List[Dict[str, str]]:
+    if category == "build_only":
+        from app.config import settings
+        # Where managed builds exist, letting Ephemera build is the shorter route.
+        lead = [{"kind": "managed_builds", "label": "Let Ephemera build it"}] if settings.managed_builds_enabled else []
+        return lead + [dict(GUIDE)]
     if category == "image_private":
         # Pre-select the registry the failing image comes from.
         from app.services.registries import display_registry, image_registry
@@ -166,11 +171,10 @@ def explain(error: Optional[str], repository: str = "", commit_sha: str = "",
                  f"The image reference for {_names(names)} isn't a valid image name.",
                  "Fix the image: line in docker-compose.yml (lowercase, registry/name:tag) and push a commit.")
     if "Nothing to preview" in error or "every service is build-only" in error:
+        from app.services.compose import image_options
         return d("build_only", "No image to run",
-                 "The services a reviewer would open only have build:, and Ephemera runs images; it doesn't build them.",
-                 "Have CI push an image for each commit and reference it next to build:, for example "
-                 "image: ghcr.io/<owner>/<repo>:${EPHEMERA_SHA}. The setup check on the Repositories page "
-                 "shows this per service.")
+                 "The services a reviewer would open only have build:, and nothing gave them an image to run.",
+                 image_options().replace("`", "") + " The setup check on the Repositories page shows this per service.")
     if "CrashLoopBackOff" in error or "container exited with code" in error:
         code = _EXIT_CODE.search(error)
         return d("crash", "The app keeps crashing",

@@ -41,6 +41,19 @@ _LIVE = (EnvironmentStatus.PENDING, EnvironmentStatus.PROVISIONING, EnvironmentS
          EnvironmentStatus.UPDATING, EnvironmentStatus.FAILED)
 
 
+def default_protection(db: Session, repository_full_name: str, private: bool) -> None:
+    """
+    A repository Ephemera hasn't recorded settings for gets its default:
+    collaborators-only previews for a private repository, public links for a
+    public one. An explicit choice on the dashboard is never overwritten.
+    """
+    exists = (db.query(RepositorySettings.id)
+                .filter(func.lower(RepositorySettings.repository_full_name) == repository_full_name.lower()).first())
+    if exists is None:
+        db.add(RepositorySettings(repository_full_name=repository_full_name, protect_previews=bool(private)))
+        db.commit()
+
+
 def is_protected(db: Session, repository_full_name: str) -> bool:
     row = (db.query(RepositorySettings)
              .filter(func.lower(RepositorySettings.repository_full_name) == repository_full_name.lower()).first())

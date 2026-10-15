@@ -178,12 +178,23 @@ def classify_service(cfg: Dict[str, Any], target_ports: List[int]) -> "tuple[boo
     return True, "serves HTTP"
 
 
+def image_options() -> str:
+    """How a build-only service gets an image: managed builds where the server offers them, else CI."""
+    from app.config import settings  # deferred: tests import compose without settings
+
+    ci = ("have CI push an image for each commit and reference it next to `build:`, "
+          "e.g. `image: ghcr.io/<owner>/<repo>:${EPHEMERA_SHA}`")
+    if settings.managed_builds_enabled:
+        return f"Turn on managed builds on the Repositories page so Ephemera builds it from each commit, or {ci}."
+    return ci[0].upper() + ci[1:] + "."
+
+
 def build_only_blocker(compose: Dict[str, Any]) -> Optional[str]:
     """
     Why the preview cannot be deployed at all, or None.
 
-    Ephemera runs images; it cannot build them. A service with ``build:`` and
-    no ``image:`` is skipped. When that leaves nothing a reviewer could open,
+    A service with ``build:`` and no ``image:`` (and not built by managed
+    builds, which give it one before this runs) is skipped. When that leaves nothing a reviewer could open,
     deploying the rest (typically a database and a cache) only produces
     crash-looping pods and a misleading error, so the deploy stops before
     touching the cluster and says what to add.
@@ -202,7 +213,5 @@ def build_only_blocker(compose: Dict[str, Any]) -> Optional[str]:
     names = ", ".join(f"`{n}`" for n in report.build_only)
     return (
         f"Nothing to preview: {names} {'has' if len(report.build_only) == 1 else 'have'} `build:` but no `image:`. "
-        "Ephemera runs images and cannot build them. Have CI push an image for each commit and reference it "
-        "next to `build:`, e.g. `image: ghcr.io/<owner>/<repo>:${EPHEMERA_SHA}`. "
-        "The setup check on the Repositories page shows this per service."
+        + image_options() + " The setup check on the Repositories page shows this per service."
     )

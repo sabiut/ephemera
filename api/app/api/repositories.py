@@ -89,11 +89,12 @@ async def check_repository(owner: str, repo: str, pr: Optional[int] = None, db: 
     """
     Check the repository's compose file: on the default branch, or with
     ``pr=N`` at that pull request's latest commit, so a fix made inside the
-    PR is what gets checked.
+    PR is what gets checked. Services Ephemera builds (managed builds) pass
+    as such instead of asking for a CI workflow.
     """
     installed = _accessible_repo(owner, repo, current_user)
     ref, label = _resolve_ref(installed, pr)
-    report = setup_check.check_repository(installed, ref=ref)
+    report = setup_check.check_repository(installed, ref=ref, managed=managed_builds.state(db, installed.full_name))
     body = report.as_dict()
     errors = [c.get("title") for c in body.get("checks", []) if c.get("level") == "error"]
     if errors:
@@ -185,10 +186,13 @@ class RepositorySettingsIO(BaseModel):
     # Previews whose last change could not be applied (still on the old
     # access); saving the setting again retries them.
     previews_failed: int = 0
+    # Private repositories default to collaborators-only previews.
+    private: bool = False
 
 
-def _settings_out(db: Session, repository_full_name: str, row) -> RepositorySettingsIO:
-    protect = bool(row and row.protect_previews)
+def _settings_out(db: Session, repository_full_name: str, row, private: bool = False) -> RepositorySettingsIO:
+    # No record yet: the default its first pull request will record.
+    protect = bool(row.protect_previews) if row is not None else private
     wanted = "protected" if protect else "public"
     live = db.query(Environment).filter(func.lower(Environment.repository_full_name) == repository_full_name.lower(),
                                         Environment.status.in_(provisioning.HOLDS_RESOURCES)).all()
@@ -196,7 +200,7 @@ def _settings_out(db: Session, repository_full_name: str, row) -> RepositorySett
     failed = sum(1 for e in live if e.access_applied == "failed")
     return RepositorySettingsIO(protect_previews=protect, updated_by_login=row.updated_by_login if row else None,
                                 updated_at=row.updated_at if row else None, previews=len(live),
-                                previews_applied=applied, previews_failed=failed)
+                                previews_applied=applied, previews_failed=failed, private=private)
 
 
 @router.get("/repositories/{owner}/{repo}/settings", response_model=RepositorySettingsIO)
@@ -204,7 +208,7 @@ async def get_repository_settings(owner: str, repo: str, db: Session = Depends(g
                                   current_user: User = Depends(get_current_user)):
     installed = _accessible_repo(owner, repo, current_user)
     row = db.query(RepositorySettings).filter(func.lower(RepositorySettings.repository_full_name) == installed.full_name.lower()).first()
-    return _settings_out(db, installed.full_name, row)
+    return _settings_out(db, installed.full_name, row, installed.private)
 
 
 @router.put("/repositories/{owner}/{repo}/settings", response_model=RepositorySettingsIO)
@@ -232,7 +236,7 @@ def put_repository_settings(owner: str, repo: str, body: RepositorySettingsIO, d
                                             Environment.status.in_(provisioning.HOLDS_RESOURCES)).all():
         if (env.access_applied or "public") != wanted:
             apply_preview_access.delay(environment_id=env.id)
-    return _settings_out(db, installed.full_name, row)
+    return _settings_out(db, installed.full_name, row, installed.private)
 
 
 class UsageResponse(BaseModel):

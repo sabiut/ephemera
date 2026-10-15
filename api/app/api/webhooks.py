@@ -12,7 +12,7 @@ from app.crud import user as user_crud
 from app.database import SessionLocal
 from app.models.environment import EnvironmentStatus
 from app.schemas.github import PullRequestWebhook
-from app.services import repo_access
+from app.services import preview_access, repo_access
 from app.services.github import github_service
 from app.services.provisioning import EnvironmentRequest, PreviewLimitReached, request_environment
 from app.tasks.environment import destroy_environment, update_environment
@@ -39,6 +39,7 @@ def handle_pull_request_opened(payload: PullRequestWebhook):
         return
 
     with SessionLocal() as db:
+        preview_access.default_protection(db, repo.full_name, repo.private)
         owner = user_crud.get_or_create_user(
             db=db,
             github_id=pr.user.id,
@@ -164,6 +165,7 @@ def handle_pull_request_synchronize(payload: PullRequestWebhook):
     logger.info(f"PR #{pr.number} updated with new commits in {repo.full_name}")
 
     with SessionLocal() as db:
+        preview_access.default_protection(db, repo.full_name, repo.private)
         environment = environment_crud.get_environment_by_pr(db, repo.full_name, pr.number)
         removed_but_open = (
             environment is not None and environment.closed_at is None

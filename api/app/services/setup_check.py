@@ -19,6 +19,7 @@ import yaml
 from app.services.compose import PUBLIC_LABEL, READINESS_LABEL, readiness_path
 from app.services.compose import classify_service, commit_variables, image_report, interpolate
 from app.services.deployment import COMPOSE_FILENAMES, choose_primary_url, parse_port
+from app.services.build_plan import detect
 from app.services.github import InstalledRepository, github_service
 
 # Stands in for a real commit so ${EPHEMERA_SHA} can be recognised in images.
@@ -68,7 +69,8 @@ class SetupReport:
     ref: str
     compose_file: Optional[str] = None
     ready: bool = False
-    needs_image_setup: bool = False   # a service has build: without a per-commit image
+    needs_image_setup: bool = False   # a service has build: without a per-commit image, and Ephemera won't build it
+    managed_builds: str = "unavailable"  # on | available | unavailable (managed_builds.state)
     checks: List[Check] = field(default_factory=list)
     services: List[ServiceSummary] = field(default_factory=list)
 
@@ -89,9 +91,16 @@ def _fetch_compose(repo: InstalledRepository, ref: str):
     return None, None
 
 
-def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch=_fetch_compose) -> SetupReport:
+def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch=None,
+                     managed: str = "unavailable") -> SetupReport:
+    """
+    managed: whether Ephemera builds this repository's build-only services
+    (managed_builds.state). The check then says what the deploy will really
+    do, rather than asking for a CI workflow Ephemera no longer needs.
+    """
+    fetch = fetch or _fetch_compose  # looked up per call, so tests can replace it
     ref = ref or repo.default_branch
-    report = SetupReport(repository=repo.full_name, ref=ref)
+    report = SetupReport(repository=repo.full_name, ref=ref, managed_builds=managed)
     where = ref[:7] if len(ref) == 40 and all(c in "0123456789abcdef" for c in ref) else ref
     add = report.checks.append
 
@@ -125,12 +134,14 @@ def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch
         return report
 
     images = image_report(compose, _PROBE_SHA)
-    report.needs_image_setup = bool(images.build_only or images.unpinned_builds)
+    plan = {p.name: p for p in detect(content).services} if managed == "on" else {}
+    built = {n for n, p in plan.items() if p.kind == "build"}
+    report.needs_image_setup = bool(set(images.build_only + images.unpinned_builds) - built)
     public_urls: Dict[str, str] = {}
     for name, cfg in services.items():
         cfg = cfg if isinstance(cfg, dict) else {}
         ports = [p for p in map(parse_port, cfg.get("ports", []) or []) if p]
-        deployable = name in images.images
+        deployable = name in images.images or name in built
         is_public, why = classify_service(cfg, [t for _, t in ports])
         public = deployable and is_public
         if deployable and ports and not is_public:
@@ -145,13 +156,29 @@ def check_repository(repo: InstalledRepository, ref: Optional[str] = None, fetch
                           f"Add the label {READINESS_LABEL}: /health (a path that returns 200 when {name} works) "
                           "so Ready means the preview works."))
         report.services.append(ServiceSummary(
-            name=name, image=images.images.get(name), deployable=deployable,
-            commit_image=name in images.pinned, public=public,
+            name=name, image="built by Ephemera" if name in built else images.images.get(name),
+            deployable=deployable, commit_image=name in images.pinned or name in built, public=public,
         ))
 
-        if name in images.build_only:
+        if name in built:
+            replaced = f" (instead of {images.images[name]})" if name in images.unpinned_builds else ""
+            add(Check("ok", f"{name}: built by Ephemera from each commit",
+                      f"Managed builds build it from the pull request's commit{replaced}; no CI workflow or "
+                      "registry token needed."))
+        elif managed == "on" and plan.get(name) is not None and plan[name].kind == "unsupported":
+            add(Check("error", f"{name}: managed builds can't build it",
+                      "; ".join(plan[name].reasons),
+                      f"Change its build: section, or have CI push an image per commit and add "
+                      f"image: <registry>/{name}:${{EPHEMERA_SHA}}."))
+        elif name in images.build_only and managed == "available":
+            add(Check("error", f"{name}: no image to deploy yet",
+                      "It only has build:. Ephemera can build it from each commit: turn on managed builds "
+                      "for this repository below.",
+                      f"Turn on managed builds, or have CI push an image per commit and add "
+                      f"image: <registry>/{name}:${{EPHEMERA_SHA}}."))
+        elif name in images.build_only:
             add(Check("error", f"{name}: no image to deploy",
-                      "It only has build:. Ephemera deploys images; it does not build them.",
+                      "It only has build:, and this Ephemera server doesn't build images for this repository.",
                       f"Have CI push an image per commit and add image: <registry>/{name}:${{EPHEMERA_SHA}}."))
         elif name in images.unpinned_builds:
             add(Check("warning", f"{name}: not built from the pull request",
