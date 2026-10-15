@@ -53,6 +53,7 @@ test('deploys, waits, and exposes the links as outputs', () => {
   assert.strictEqual(o.url, READY.url);
   assert.deepStrictEqual(JSON.parse(o.urls), READY.urls);
   assert.strictEqual(o.id, '7');
+  assert.strictEqual(o['exit-code'], '0');
   assert.match(r.state, /^id=7$/m);
 });
 
@@ -69,6 +70,7 @@ test('a refused deploy saves no id, so the post step removes nothing', () => {
   const r = run('main.js', { inputs: BASE, code: 4 });
   assert.strictEqual(r.status, 4);
   assert.match(r.log, /::error::ephemera exited 4: Ephemera refused the request/);
+  assert.strictEqual(outputs(r.outputs)['exit-code'], '4');
   assert.doesNotMatch(r.state, /^id=/m);
 });
 

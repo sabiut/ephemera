@@ -10,6 +10,7 @@ function main() {
   const repo = input('repository', process.env.GITHUB_REPOSITORY || '');
   const url = input('ephemera-url', 'https://ephemera-api.devpreview.app');
   if (!token) {
+    setOutput('exit-code', 2);
     annotate('error', 'The token input is empty. Store a pipeline token from the Ephemera dashboard as a secret '
       + 'and pass it as token. Pull requests from forks get no secrets.');
     return 2;
@@ -29,6 +30,7 @@ function main() {
   if (input('wait', 'true') === 'true') args.push('--wait', '--timeout', input('timeout', '10m'));
 
   const { code, stdout, error } = runCli(args, token, url);
+  setOutput('exit-code', code);
   if (error) annotate('error', `Could not run the ephemera CLI: ${error}`);
   let preview = null;
   try {

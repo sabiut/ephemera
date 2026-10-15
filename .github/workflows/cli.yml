@@ -67,7 +67,12 @@ jobs:
           name: action-smoke
           images: web=nginx@sha256:0000000000000000000000000000000000000000000000000000000000000000
           ephemera-url: http://127.0.0.1:9
-      - run: test "${{ steps.unreachable.outcome }}" = failure
+      - name: It failed for the right reason
+        # A broken action.yml also "fails"; exit code 4 means the action
+        # loaded, ran the real CLI, and the CLI reported the unreachable server.
+        run: |
+          test "${{ steps.unreachable.outcome }}" = failure
+          test "${{ steps.unreachable.outputs.exit-code }}" = 4
 
   image:
     runs-on: ubuntu-latest
