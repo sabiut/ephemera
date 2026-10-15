@@ -1,6 +1,6 @@
 # Previews from a CI/CD pipeline: design
 
-Status: design agreed (decisions below). Steps 1 (model and API) and 2 (the CLI, `cli/`) are merged; the GitHub Action (step 3) is next.
+Status: design agreed (decisions below). Steps 1 (model and API), 2 (the CLI, `cli/`) and 3 (the GitHub Action, `actions/preview/`) are merged; access for tests to protected previews (step 4) is next.
 
 ## Why
 
@@ -148,7 +148,40 @@ Who may deploy: the token's owner must be a collaborator on the repository (chec
    - Detects the repository and commit in GitHub Actions (the PR's head, not the merge commit), GitLab CI and Jenkins.
    - `.github/workflows/cli.yml` tests on Python 3.9 and 3.12 and builds the package and image on every change. A `cli-vX.Y.Z` tag publishes to PyPI and `ghcr.io/sabiut/ephemera-cli`.
    - Publishing needs, once: a PyPI trusted publisher for this repository and the `cli.yml` workflow, with environment `pypi`.
-3. **GitHub Action** (`sabiut/ephemera-preview`) with a post-step delete; GitLab CI and Jenkins examples in the docs.
+3. **GitHub Action** with a post-step delete; GitLab CI and Jenkins examples in the docs.
+   - `uses: sabiut/ephemera/actions/preview@main` ([actions/preview/README.md](../actions/preview/README.md)): deploy and wait, outputs `url`, `urls`, `id` and `status`, and a failed preview as an error annotation with the explanation.
+   - Its post step (`post-if: always()`) removes the preview this run deployed, by id, so a refused older run never removes a newer run's preview. A failed removal is only a warning, since the expiry covers it. `keep: true` leaves the preview for reviewers.
+   - It is a Node action without dependencies that runs this repository's CLI at the same ref. Composite actions can't have post steps.
+   - It lives in this repository for now. The Marketplace needs `action.yml` at a repository's root, so listing it there means moving it to its own repository (`sabiut/ephemera-preview`).
+
+   **GitLab CI** (any repository on GitHub with the App installed; the pipeline itself can run anywhere):
+
+   ```yaml
+   preview:
+     image: ghcr.io/sabiut/ephemera-cli:latest      # or: pip install ephemera-cli
+     variables:
+       EPHEMERA_REPOSITORY: acme/shop                # the GitHub repository
+     script:
+       - ephemera preview deploy --name "mr-$CI_MERGE_REQUEST_IID" --commit "$CI_COMMIT_SHA"
+           --image "web=$CI_REGISTRY_IMAGE@$WEB_DIGEST" --serial "$CI_PIPELINE_IID" --wait --output json > preview.json
+       - export BASE_URL=$(python3 -c "import json; print(json.load(open('preview.json'))['url'])")
+       - ./run-e2e-tests.sh
+     after_script:
+       - ephemera preview delete --repo acme/shop --name "mr-$CI_MERGE_REQUEST_IID"
+   ```
+
+   **Jenkins** (declarative):
+
+   ```groovy
+   stage('Preview') {
+     environment { EPHEMERA_TOKEN = credentials('ephemera-token') }
+     steps {
+       sh 'pip install --user ephemera-cli'
+       sh '~/.local/bin/ephemera preview deploy --repo acme/shop --name "build-$BUILD_NUMBER" --commit "$GIT_COMMIT" --image "web=$IMAGE@$DIGEST" --wait'
+     }
+     post { always { sh '~/.local/bin/ephemera preview delete --repo acme/shop --name "build-$BUILD_NUMBER" || true' } }
+   }
+   ```
 4. **Protected previews for tests**: the access header accepted by the sign-in check.
 5. **End-to-end**: a pipeline variant of the e2e test (build the test app's image in Actions, deploy it by digest, run a request against the URL, delete).
 6. **OIDC** (v2).
